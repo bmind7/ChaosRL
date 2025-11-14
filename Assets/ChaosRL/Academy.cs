@@ -165,32 +165,6 @@ namespace ChaosRL
             return outputActions;
         }
         //------------------------------------------------------------------
-        // public (float[,] adv, float[,] ret) ComputeGAE()
-        // {
-        //     float[,] advantages = new float[ _bufferSize, _numEnvs ];
-        //     float[,] returns = new float[ _bufferSize, _numEnvs ];
-
-        //     // Maintain separate GAE accumulators per environment to avoid mixing signals between envs
-        //     for (int envIdx = 0; envIdx < _numEnvs; envIdx++)
-        //     {
-        //         float lastGAE = 0f;
-        //         // Use the last buffer value for this env to bootstrap the tail of the trajectory
-        //         float lastValueForEnv = _valBuffer[ _bufferSize - 1, envIdx ];
-
-        //         // Start from the element before last so the last slot is only used for bootstrapping
-        //         for (int bIdx = _bufferSize - 2; bIdx >= 0; bIdx--)
-        //         {
-        //             float nextNonTerminal = 1f - _doneBuffer[ bIdx, envIdx ];
-        //             float nextValue = (bIdx == _bufferSize - 2) ? lastValueForEnv : _valBuffer[ bIdx + 1, envIdx ];
-        //             float delta = _rewardBuffer[ bIdx, envIdx ] + _gamma * nextNonTerminal * nextValue - _valBuffer[ bIdx, envIdx ];
-        //             lastGAE = delta + _gamma * _gaeLambda * nextNonTerminal * lastGAE;
-        //             advantages[ bIdx, envIdx ] = lastGAE;
-        //             returns[ bIdx, envIdx ] = advantages[ bIdx, envIdx ] + _valBuffer[ bIdx, envIdx ];
-        //         }
-        //     }
-
-        //     return (advantages, returns);
-        // }
         public (float[,] advantages, float[,] returns) ComputeGAE()
         {
             int T = _bufferSize;    // time steps per env
