@@ -4,6 +4,8 @@ using ChaosRL;
 public class ChaosAgent : MonoBehaviour
 {
     //------------------------------------------------------------------
+    private const float TiltDamper = 0.1f;
+
     private static int _nextAgentIdx = 0;
 
     [Header( "Scene References" )]
@@ -119,25 +121,18 @@ public class ChaosAgent : MonoBehaviour
     public void ApplyActions( float[] continuous )
     {
         Vector3 euler = transform.localEulerAngles;
-        float damper = 0.1f; // Smoothing factor to avoid jittery, high-frequency tilts
-
-        // Convert current Euler components to signed angles (-180..180)
-        float currentPitch = Mathf.DeltaAngle( 0f, euler.x );
-        float currentRoll = Mathf.DeltaAngle( 0f, euler.z );
-
-        // Desired signed targets from actions
-        float targetPitch = Mathf.Clamp( continuous[ 0 ], -1f, 1f ) * _maxTiltDegrees;
-        float targetRoll = Mathf.Clamp( continuous[ 1 ], -1f, 1f ) * _maxTiltDegrees;
-
-        // Move a fraction of the shortest angular distance toward target
-        float pitch = currentPitch + damper * Mathf.DeltaAngle( currentPitch, targetPitch );
-        float roll = currentRoll + damper * Mathf.DeltaAngle( currentRoll, targetRoll );
-
-        // Clamp to allowed tilt range
-        pitch = Mathf.Clamp( pitch, -_maxTiltDegrees, _maxTiltDegrees );
-        roll = Mathf.Clamp( roll, -_maxTiltDegrees, _maxTiltDegrees );
+        float pitch = SmoothTilt( euler.x, continuous[ 0 ] );
+        float roll = SmoothTilt( euler.z, continuous[ 1 ] );
 
         _targetLocalRotation = Quaternion.Euler( pitch, euler.y, roll );
+    }
+    //------------------------------------------------------------------
+    private float SmoothTilt( float eulerComponent, float actionValue )
+    {
+        float currentAngle = Mathf.DeltaAngle( 0f, eulerComponent );
+        float targetAngle = Mathf.Clamp( actionValue, -1f, 1f ) * _maxTiltDegrees;
+        float nextAngle = currentAngle + TiltDamper * Mathf.DeltaAngle( currentAngle, targetAngle );
+        return nextAngle;
     }
     //------------------------------------------------------------------
     private void UpdateRotation()

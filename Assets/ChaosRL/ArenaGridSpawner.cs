@@ -83,57 +83,5 @@ namespace ChaosRL
             Debug.Log( $"Spawned {arenasSpawned} arenas in a {_gridSize.x}x{_gridSize.y}x{_gridSize.z} grid" );
         }
         //------------------------------------------------------------------
-#if UNITY_EDITOR
-        private void OnDrawGizmosSelected()
-        {
-            if (_arenaPrefab == null) return;
-
-            Gizmos.color = Color.cyan;
-
-            // Calculate temporary grid size for visualization
-            int sideLength = Mathf.CeilToInt( Mathf.Pow( _numberOfArenas, 1f / 3f ) );
-            Vector3Int tempGridSize = new Vector3Int( sideLength, sideLength, sideLength );
-
-            Vector3 startPosition = transform.position + _offset;
-
-            if (_centerGrid)
-            {
-                Vector3 gridCenter = new Vector3(
-                    (tempGridSize.x - 1) * _spacing * 0.5f,
-                    (tempGridSize.y - 1) * _spacing * 0.5f,
-                    (tempGridSize.z - 1) * _spacing * 0.5f
-                );
-                startPosition -= gridCenter;
-            }
-
-            // Draw gizmos to visualize spawn points
-            int arenasDrawn = 0;
-            for (int x = 0; x < tempGridSize.x; x++)
-            {
-                for (int y = 0; y < tempGridSize.y; y++)
-                {
-                    for (int z = 0; z < tempGridSize.z; z++)
-                    {
-                        if (arenasDrawn >= _numberOfArenas)
-                            break;
-
-                        Vector3 spawnPosition = startPosition + new Vector3(
-                            x * _spacing,
-                            y * _spacing,
-                            z * _spacing
-                        );
-
-                        Gizmos.DrawWireCube( spawnPosition, Vector3.one );
-                        arenasDrawn++;
-                    }
-                    if (arenasDrawn >= _numberOfArenas)
-                        break;
-                }
-                if (arenasDrawn >= _numberOfArenas)
-                    break;
-            }
-        }
-#endif
-        //------------------------------------------------------------------
     }
 }
