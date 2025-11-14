@@ -1,0 +1,5 @@
+﻿<Solution>
+  <Project Path="ChaosRL.csproj" />
+  <Project Path="ChaosRLTests.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
+</Solution>
