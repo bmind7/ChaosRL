@@ -1,0 +1,360 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+
+namespace ChaosRL
+{
+    /// <summary>
+    /// Multi-dimensional tensor with automatic differentiation support.
+    /// Data is stored in row-major (C-style) contiguous layout for cache efficiency.
+    /// </summary>
+    public class Tensor
+    {
+        //------------------------------------------------------------------
+        public float[] Data { get; private set; }
+        public float[] Grad { get; private set; }
+        public int[] Shape { get; private set; }
+        public int Size { get; private set; }
+        public string Name { get; set; }
+        public HashSet<Tensor> Children { get; private set; }
+        public bool IsScalar => Size == 1;
+
+        private Action _backward;
+        //------------------------------------------------------------------
+        public Tensor( int[] shape, float[] data = null, string name = "" )
+        {
+            if (shape == null || shape.Length == 0)
+                throw new ArgumentException( "Shape must have at least one dimension", nameof( shape ) );
+
+            foreach (var dim in shape)
+                if (dim <= 0)
+                    throw new ArgumentException( "All dimensions must be positive", nameof( shape ) );
+
+            Shape = (int[])shape.Clone();
+            Size = 1;
+            foreach (var dim in Shape)
+                Size *= dim;
+
+            Data = data ?? new float[ Size ];
+            Grad = new float[ Size ];
+            Name = name;
+            Children = new HashSet<Tensor>();
+            _backward = null;
+
+            if (data != null && data.Length != Size)
+                throw new ArgumentException( $"Data length {data.Length} doesn't match shape size {Size}" );
+        }
+        //------------------------------------------------------------------
+        public Tensor( int[] shape, Tensor[] children, string name = "" ) : this( shape, (float[])null, name )
+        {
+            if (children != null)
+                foreach (var child in children)
+                    Children.Add( child );
+        }
+        //------------------------------------------------------------------
+        // Scalar tensor constructor
+        public Tensor( float scalar, string name = "" ) : this( new[] { 1 }, new[] { scalar }, name )
+        {
+        }
+        //------------------------------------------------------------------
+        public static implicit operator Tensor( float f )
+        {
+            return new Tensor( f );
+        }
+        //------------------------------------------------------------------
+        // Element-wise addition
+        public static Tensor operator +( Tensor a, Tensor b )
+        {
+            // Handle scalar broadcasting
+            if (a.IsScalar && !b.IsScalar)
+                a = a.Broadcast( b.Shape );
+            else if (b.IsScalar && !a.IsScalar)
+                b = b.Broadcast( a.Shape );
+
+            if (!ShapesMatch( a.Shape, b.Shape ))
+                throw new ArgumentException( "Shapes must match for addition" );
+
+            var result = new Tensor( a.Shape, new[] { a, b }, "+" );
+            for (int i = 0; i < a.Size; i++)
+                result.Data[ i ] = a.Data[ i ] + b.Data[ i ];
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < a.Size; i++)
+                {
+                    a.Grad[ i ] += result.Grad[ i ];
+                    b.Grad[ i ] += result.Grad[ i ];
+                }
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        // Element-wise multiplication
+        public static Tensor operator *( Tensor a, Tensor b )
+        {
+            // Handle scalar broadcasting
+            if (a.IsScalar && !b.IsScalar)
+                a = a.Broadcast( b.Shape );
+            else if (b.IsScalar && !a.IsScalar)
+                b = b.Broadcast( a.Shape );
+
+            if (!ShapesMatch( a.Shape, b.Shape ))
+                throw new ArgumentException( "Shapes must match for multiplication" );
+
+            var result = new Tensor( a.Shape, new[] { a, b }, "*" );
+            for (int i = 0; i < a.Size; i++)
+                result.Data[ i ] = a.Data[ i ] * b.Data[ i ];
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < a.Size; i++)
+                {
+                    a.Grad[ i ] += b.Data[ i ] * result.Grad[ i ];
+                    b.Grad[ i ] += a.Data[ i ] * result.Grad[ i ];
+                }
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public static Tensor operator -( Tensor a )
+        {
+            return a * -1f;
+        }
+        //------------------------------------------------------------------
+        public static Tensor operator -( Tensor a, Tensor b )
+        {
+            return a + (-b);
+        }
+        //------------------------------------------------------------------
+        public static Tensor operator /( Tensor a, Tensor b )
+        {
+            // Handle scalar broadcasting
+            if (a.IsScalar && !b.IsScalar)
+                a = a.Broadcast( b.Shape );
+            else if (b.IsScalar && !a.IsScalar)
+                b = b.Broadcast( a.Shape );
+
+            if (!ShapesMatch( a.Shape, b.Shape ))
+                throw new ArgumentException( "Shapes must match for division" );
+
+            var result = new Tensor( a.Shape, new[] { a, b }, "/" );
+            for (int i = 0; i < a.Size; i++)
+                result.Data[ i ] = a.Data[ i ] / b.Data[ i ];
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < a.Size; i++)
+                {
+                    a.Grad[ i ] += (1f / b.Data[ i ]) * result.Grad[ i ];
+                    b.Grad[ i ] += (-a.Data[ i ] / (b.Data[ i ] * b.Data[ i ])) * result.Grad[ i ];
+                }
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public Tensor Pow( float exponent )
+        {
+            var result = new Tensor( Shape, new[] { this }, $"^{exponent}" );
+            for (int i = 0; i < Size; i++)
+                result.Data[ i ] = MathF.Pow( Data[ i ], exponent );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                    Grad[ i ] += exponent * MathF.Pow( Data[ i ], exponent - 1 ) * result.Grad[ i ];
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public Tensor Exp()
+        {
+            var result = new Tensor( Shape, new[] { this }, "exp" );
+            for (int i = 0; i < Size; i++)
+                result.Data[ i ] = MathF.Exp( Data[ i ] );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                    Grad[ i ] += result.Data[ i ] * result.Grad[ i ];
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public Tensor Log()
+        {
+            var result = new Tensor( Shape, new[] { this }, "log" );
+            for (int i = 0; i < Size; i++)
+                result.Data[ i ] = MathF.Log( Data[ i ] );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                    Grad[ i ] += (1f / Data[ i ]) * result.Grad[ i ];
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public Tensor ReLU()
+        {
+            var result = new Tensor( Shape, new[] { this }, "ReLU" );
+            for (int i = 0; i < Size; i++)
+                result.Data[ i ] = Data[ i ] > 0 ? Data[ i ] : 0;
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                    Grad[ i ] += (Data[ i ] > 0 ? 1f : 0f) * result.Grad[ i ];
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public Tensor Tanh()
+        {
+            var result = new Tensor( Shape, new[] { this }, "tanh" );
+            for (int i = 0; i < Size; i++)
+                result.Data[ i ] = MathF.Tanh( Data[ i ] );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                    Grad[ i ] += (1f - result.Data[ i ] * result.Data[ i ]) * result.Grad[ i ];
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public Tensor Clamp( float min, float max )
+        {
+            var result = new Tensor( Shape, new[] { this }, "clamp" );
+            for (int i = 0; i < Size; i++)
+                result.Data[ i ] = Math.Max( min, Math.Min( max, Data[ i ] ) );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                    if (Data[ i ] >= min && Data[ i ] <= max)
+                        Grad[ i ] += result.Grad[ i ];
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public static Tensor Max( Tensor a, Tensor b )
+        {
+            if (!ShapesMatch( a.Shape, b.Shape ))
+                throw new ArgumentException( "Shapes must match for max" );
+
+            var result = new Tensor( a.Shape, new[] { a, b }, "max" );
+            for (int i = 0; i < a.Size; i++)
+                result.Data[ i ] = Math.Max( a.Data[ i ], b.Data[ i ] );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < a.Size; i++)
+                {
+                    if (a.Data[ i ] >= b.Data[ i ])
+                        a.Grad[ i ] += result.Grad[ i ];
+                    else
+                        b.Grad[ i ] += result.Grad[ i ];
+                }
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public static Tensor Min( Tensor a, Tensor b )
+        {
+            if (!ShapesMatch( a.Shape, b.Shape ))
+                throw new ArgumentException( "Shapes must match for min" );
+
+            var result = new Tensor( a.Shape, new[] { a, b }, "min" );
+            for (int i = 0; i < a.Size; i++)
+                result.Data[ i ] = Math.Min( a.Data[ i ], b.Data[ i ] );
+
+            result._backward = () =>
+            {
+                for (int i = 0; i < a.Size; i++)
+                {
+                    if (a.Data[ i ] <= b.Data[ i ])
+                        a.Grad[ i ] += result.Grad[ i ];
+                    else
+                        b.Grad[ i ] += result.Grad[ i ];
+                }
+            };
+            return result;
+        }
+        //------------------------------------------------------------------
+        public void Backward()
+        {
+            var topo = new List<Tensor>();
+            var visited = new HashSet<Tensor>();
+
+            void BuildTopo( Tensor t )
+            {
+                if (visited.Contains( t ))
+                    return;
+
+                visited.Add( t );
+                foreach (var child in t.Children)
+                    BuildTopo( child );
+                topo.Add( t );
+            }
+
+            BuildTopo( this );
+
+            Array.Fill( Grad, 1f );
+
+            topo.Reverse();
+            foreach (var t in topo)
+                t._backward?.Invoke();
+        }
+        //------------------------------------------------------------------
+        public void ZeroGrad()
+        {
+            Array.Clear( Grad, 0, Grad.Length );
+        }
+        //------------------------------------------------------------------
+        private static bool ShapesMatch( int[] shape1, int[] shape2 )
+        {
+            if (shape1.Length != shape2.Length)
+                return false;
+
+            for (int i = 0; i < shape1.Length; i++)
+                if (shape1[ i ] != shape2[ i ])
+                    return false;
+
+            return true;
+        }
+        //------------------------------------------------------------------
+        private Tensor Broadcast( int[] targetShape )
+        {
+            if (!IsScalar)
+                return this;
+
+            var broadcasted = new Tensor( targetShape, Children.ToArray() );
+            var scalarValue = Data[ 0 ];
+            for (int i = 0; i < broadcasted.Size; i++)
+                broadcasted.Data[ i ] = scalarValue;
+
+            return broadcasted;
+        }
+        //------------------------------------------------------------------
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+            sb.Append( "Tensor(" );
+            sb.Append( string.Join( "x", Shape ) );
+            sb.Append( ") [" );
+
+            int preview = Math.Min( 5, Size );
+            for (int i = 0; i < preview; i++)
+            {
+                sb.Append( Data[ i ].ToString( "G6" ) );
+                if (i < preview - 1) sb.Append( ", " );
+            }
+            if (Size > preview) sb.Append( "..." );
+
+            sb.Append( "]" );
+            return sb.ToString();
+        }
+        //------------------------------------------------------------------
+    }
+}

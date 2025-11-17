@@ -31,8 +31,8 @@ namespace ChaosRL
             var result = new Value( a.Data + b.Data, new Value[] { a, b }, "+" );
             result._backward = () =>
             {
-                a.Grad += 1 * result.Grad;
-                b.Grad += 1 * result.Grad;
+                a.Grad += result.Grad;
+                b.Grad += result.Grad;
             };
             return result;
         }
