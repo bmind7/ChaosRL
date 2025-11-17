@@ -1,0 +1,449 @@
+using System;
+using System.Diagnostics;
+using NUnit.Framework;
+using ChaosRL;
+using Debug = UnityEngine.Debug;
+
+namespace ChaosRL.Tests
+{
+    /// <summary>
+    /// Performance benchmarks comparing scalar Value vs vectorized Tensor operations.
+    /// Run in Release mode for accurate results.
+    /// </summary>
+    public class AutodiffBenchmarks
+    {
+        private const int WarmupIterations = 10;
+        private const int BenchmarkIterations = 100;
+
+        //------------------------------------------------------------------
+        // 1D Benchmarks
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_1D_256()
+        {
+            BenchmarkOperation( new[] { 256 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_1D_512()
+        {
+            BenchmarkOperation( new[] { 512 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_1D_1024()
+        {
+            BenchmarkOperation( new[] { 1024 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_1D_256()
+        {
+            BenchmarkOperation( new[] { 256 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_1D_512()
+        {
+            BenchmarkOperation( new[] { 512 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_1D_1024()
+        {
+            BenchmarkOperation( new[] { 1024 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        // 2D Benchmarks
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_2D_16x16()
+        {
+            BenchmarkOperation( new[] { 16, 16 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_2D_32x32()
+        {
+            BenchmarkOperation( new[] { 32, 32 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_2D_16x16()
+        {
+            BenchmarkOperation( new[] { 16, 16 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_2D_32x32()
+        {
+            BenchmarkOperation( new[] { 32, 32 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        // 3D Benchmarks
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_3D_8x8x8()
+        {
+            BenchmarkOperation( new[] { 8, 8, 8 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Addition_3D_16x16x4()
+        {
+            BenchmarkOperation( new[] { 16, 16, 4 }, "Addition" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_3D_8x8x8()
+        {
+            BenchmarkOperation( new[] { 8, 8, 8 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Multiplication_3D_16x16x4()
+        {
+            BenchmarkOperation( new[] { 16, 16, 4 }, "Multiplication" );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ComplexForward_1D_256()
+        {
+            BenchmarkComplexForward( new[] { 256 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ComplexForward_1D_512()
+        {
+            BenchmarkComplexForward( new[] { 512 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ComplexForward_1D_1024()
+        {
+            BenchmarkComplexForward( new[] { 1024 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ComplexForward_2D_32x32()
+        {
+            BenchmarkComplexForward( new[] { 32, 32 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ComplexForward_3D_16x16x4()
+        {
+            BenchmarkComplexForward( new[] { 16, 16, 4 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ForwardBackward_1D_256()
+        {
+            BenchmarkForwardBackward( new[] { 256 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ForwardBackward_1D_512()
+        {
+            BenchmarkForwardBackward( new[] { 512 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ForwardBackward_1D_1024()
+        {
+            BenchmarkForwardBackward( new[] { 1024 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ForwardBackward_2D_32x32()
+        {
+            BenchmarkForwardBackward( new[] { 32, 32 } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_ForwardBackward_3D_16x16x4()
+        {
+            BenchmarkForwardBackward( new[] { 16, 16, 4 } );
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkOperation( int[] shape, string operation )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            Debug.Log( $"\n=== {operation} Benchmark (Shape: {string.Join( "x", shape )}, Size: {size}) ===" );
+
+            // Warmup
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                RunValueOperation( shape, operation );
+                RunTensorOperation( shape, operation );
+            }
+
+            // Benchmark Value (scalar)
+            var swValue = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunValueOperation( shape, operation );
+            }
+            swValue.Stop();
+
+            // Benchmark Tensor (vectorized)
+            var swTensor = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunTensorOperation( shape, operation );
+            }
+            swTensor.Stop();
+
+            var valueMs = swValue.Elapsed.TotalMilliseconds;
+            var tensorMs = swTensor.Elapsed.TotalMilliseconds;
+            var speedup = valueMs / tensorMs;
+
+            Debug.Log( $"Value  (scalar):     {valueMs:F3} ms ({valueMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Tensor (vectorized): {tensorMs:F3} ms ({tensorMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Speedup: {speedup:F2}x" );
+        }
+        //------------------------------------------------------------------
+        private void RunValueOperation( int[] shape, string operation )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            var values1 = new Value[ size ];
+            var values2 = new Value[ size ];
+
+            for (int i = 0; i < size; i++)
+            {
+                values1[ i ] = new Value( i * 0.1f );
+                values2[ i ] = new Value( (size - i) * 0.1f );
+            }
+
+            switch (operation)
+            {
+                case "Addition":
+                    for (int i = 0; i < size; i++)
+                        _ = values1[ i ] + values2[ i ];
+                    break;
+                case "Multiplication":
+                    for (int i = 0; i < size; i++)
+                        _ = values1[ i ] * values2[ i ];
+                    break;
+            }
+        }
+        //------------------------------------------------------------------
+        private void RunTensorOperation( int[] shape, string operation )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            var data1 = new float[ size ];
+            var data2 = new float[ size ];
+
+            for (int i = 0; i < size; i++)
+            {
+                data1[ i ] = i * 0.1f;
+                data2[ i ] = (size - i) * 0.1f;
+            }
+
+            var tensor1 = new Tensor( shape, data1 );
+            var tensor2 = new Tensor( shape, data2 );
+
+            switch (operation)
+            {
+                case "Addition":
+                    _ = tensor1 + tensor2;
+                    break;
+                case "Multiplication":
+                    _ = tensor1 * tensor2;
+                    break;
+            }
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkComplexForward( int[] shape )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            Debug.Log( $"\n=== Complex Forward Pass (Shape: {string.Join( "x", shape )}, Size: {size}) ===" );
+
+            // Warmup
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                RunValueComplexForward( shape );
+                RunTensorComplexForward( shape );
+            }
+
+            // Benchmark Value
+            var swValue = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunValueComplexForward( shape );
+            }
+            swValue.Stop();
+
+            // Benchmark Tensor
+            var swTensor = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunTensorComplexForward( shape );
+            }
+            swTensor.Stop();
+
+            var valueMs = swValue.Elapsed.TotalMilliseconds;
+            var tensorMs = swTensor.Elapsed.TotalMilliseconds;
+            var speedup = valueMs / tensorMs;
+
+            Debug.Log( $"Value  (scalar):     {valueMs:F3} ms ({valueMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Tensor (vectorized): {tensorMs:F3} ms ({tensorMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Speedup: {speedup:F2}x" );
+        }
+        //------------------------------------------------------------------
+        private void RunValueComplexForward( int[] shape )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            // Simulate: y = tanh(x * w + b)
+            var x = new Value[ size ];
+            var w = new Value[ size ];
+            var b = new Value[ size ];
+
+            for (int i = 0; i < size; i++)
+            {
+                x[ i ] = new Value( i * 0.01f );
+                w[ i ] = new Value( 0.5f );
+                b[ i ] = new Value( 0.1f );
+            }
+
+            for (int i = 0; i < size; i++)
+            {
+                _ = (x[ i ] * w[ i ] + b[ i ]).Tanh();
+            }
+        }
+        //------------------------------------------------------------------
+        private void RunTensorComplexForward( int[] shape )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            // Simulate: y = tanh(x * w + b)
+            var xData = new float[ size ];
+            var wData = new float[ size ];
+            var bData = new float[ size ];
+
+            for (int i = 0; i < size; i++)
+            {
+                xData[ i ] = i * 0.01f;
+                wData[ i ] = 0.5f;
+                bData[ i ] = 0.1f;
+            }
+
+            var x = new Tensor( shape, xData );
+            var w = new Tensor( shape, wData );
+            var b = new Tensor( shape, bData );
+
+            _ = (x * w + b).Tanh();
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkForwardBackward( int[] shape )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            Debug.Log( $"\n=== Forward + Backward Pass (Shape: {string.Join( "x", shape )}, Size: {size}) ===" );
+
+            // Warmup
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                RunValueForwardBackward( shape );
+                RunTensorForwardBackward( shape );
+            }
+
+            // Benchmark Value
+            var swValue = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunValueForwardBackward( shape );
+            }
+            swValue.Stop();
+
+            // Benchmark Tensor
+            var swTensor = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunTensorForwardBackward( shape );
+            }
+            swTensor.Stop();
+
+            var valueMs = swValue.Elapsed.TotalMilliseconds;
+            var tensorMs = swTensor.Elapsed.TotalMilliseconds;
+            var speedup = valueMs / tensorMs;
+
+            Debug.Log( $"Value  (scalar):     {valueMs:F3} ms ({valueMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Tensor (vectorized): {tensorMs:F3} ms ({tensorMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Speedup: {speedup:F2}x" );
+        }
+        //------------------------------------------------------------------
+        private void RunValueForwardBackward( int[] shape )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            var x = new Value[ size ];
+            var w = new Value[ size ];
+
+            for (int i = 0; i < size; i++)
+            {
+                x[ i ] = new Value( i * 0.01f );
+                w[ i ] = new Value( 0.5f );
+            }
+
+            Value sum = 0f;
+            for (int i = 0; i < size; i++)
+            {
+                sum = sum + (x[ i ] * w[ i ]).Tanh();
+            }
+
+            sum.Backward();
+        }
+        //------------------------------------------------------------------
+        private void RunTensorForwardBackward( int[] shape )
+        {
+            int size = 1;
+            foreach (var dim in shape)
+                size *= dim;
+
+            var xData = new float[ size ];
+            var wData = new float[ size ];
+
+            for (int i = 0; i < size; i++)
+            {
+                xData[ i ] = i * 0.01f;
+                wData[ i ] = 0.5f;
+            }
+
+            var x = new Tensor( new[] { size }, xData );
+            var w = new Tensor( new[] { size }, wData );
+
+            var result = (x * w).Tanh();
+
+            // Sum reduction (manual for now)
+            float sum = 0f;
+            for (int i = 0; i < result.Size; i++)
+                sum += result.Data[ i ];
+
+            var loss = new Tensor( sum );
+            loss.Backward();
+        }
+        //------------------------------------------------------------------
+    }
+}
