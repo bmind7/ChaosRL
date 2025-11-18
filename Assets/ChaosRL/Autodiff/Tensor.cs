@@ -449,6 +449,34 @@ namespace ChaosRL
             return result;
         }
         //------------------------------------------------------------------
+        /// <summary>
+        /// Mean of all elements to a scalar tensor.
+        /// </summary>
+        public Tensor Mean()
+        {
+            var sum = Sum();
+            return sum / (float)Size;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Mean along a specific dimension.
+        /// For example, if shape is [2, 3, 4] and dim=1, result shape is [2, 4].
+        /// </summary>
+        public Tensor Mean( int dim )
+        {
+            int rank = Shape.Length;
+
+            // Support negative dims
+            if (dim < 0) dim += rank;
+            if (dim < 0 || dim >= rank)
+                throw new ArgumentException(
+                    $"Dimension {dim} out of range for shape with {rank} dimensions" );
+
+            var sum = Sum( dim );
+            var dimSize = Shape[ dim ];
+            return sum / (float)dimSize;
+        }
+        //------------------------------------------------------------------
         public void Backward()
         {
             var topo = new List<Tensor>();

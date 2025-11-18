@@ -712,5 +712,116 @@ namespace ChaosRL.Tests
                 Assert.That( b.Grad[ i ], Is.EqualTo( a.Data[ i ] ).Within( 1e-6 ) );
         }
         //------------------------------------------------------------------
+        [Test]
+        public void Mean_AllDimensions_ComputesCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var mean = a.Mean();
+
+            Assert.That( mean.Shape, Is.EqualTo( new[] { 1 } ) );
+            Assert.That( mean.Data[ 0 ], Is.EqualTo( 3.5f ).Within( 1e-6 ) ); // 21/6 = 3.5
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_AllDimensions_BackwardScalesGradient()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var mean = a.Mean();
+
+            mean.Backward();
+
+            // Gradient should be 1/size = 1/6 for all elements
+            for (int i = 0; i < a.Size; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 1f / 6f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_AlongDimension0_ComputesCorrectly()
+        {
+            // Shape [2, 3]: [[1, 2, 3], [4, 5, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var mean = a.Mean( 0 ); // Mean along rows
+
+            // Result shape should be [3]
+            Assert.That( mean.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( mean.Data[ 0 ], Is.EqualTo( 2.5f ).Within( 1e-6 ) );  // (1+4)/2
+            Assert.That( mean.Data[ 1 ], Is.EqualTo( 3.5f ).Within( 1e-6 ) );  // (2+5)/2
+            Assert.That( mean.Data[ 2 ], Is.EqualTo( 4.5f ).Within( 1e-6 ) );  // (3+6)/2
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_AlongDimension1_ComputesCorrectly()
+        {
+            // Shape [2, 3]: [[1, 2, 3], [4, 5, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var mean = a.Mean( 1 ); // Mean along columns
+
+            // Result shape should be [2]
+            Assert.That( mean.Shape, Is.EqualTo( new[] { 2 } ) );
+            Assert.That( mean.Data[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );   // (1+2+3)/3
+            Assert.That( mean.Data[ 1 ], Is.EqualTo( 5f ).Within( 1e-6 ) );   // (4+5+6)/3
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_AlongDimension_BackwardScalesGradient()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var mean = a.Mean( 1 ); // Mean along columns -> shape [2]
+
+            mean.Backward();
+
+            // Gradient should be 1/dimSize = 1/3 for all elements
+            for (int i = 0; i < a.Size; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 1f / 3f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_NegativeDimension_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = i + 1;
+
+            // dim=-1 should be equivalent to dim=2
+            var mean = a.Mean( -1 );
+
+            Assert.That( mean.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( mean.Size, Is.EqualTo( 6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_InvalidDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => a.Mean( -3 ) );
+            Assert.Throws<ArgumentException>( () => a.Mean( 2 ) );
+            Assert.Throws<ArgumentException>( () => a.Mean( 5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Mean_ChainedWithOperations_ComputesGradientsCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 2 }, new[] { 1f, 2f, 3f, 4f } );
+            var b = new Tensor( new[] { 2, 2 }, new[] { 2f, 2f, 2f, 2f } );
+
+            var c = a * b;
+            var mean = c.Mean();
+
+            Assert.That( mean.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) ); // (2+4+6+8)/4 = 5
+
+            mean.Backward();
+
+            // dc/da = b, dmean/dc = 1/4, so da = b/4
+            for (int i = 0; i < a.Size; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 0.5f ).Within( 1e-6 ) ); // 2/4
+
+            // dc/db = a, dmean/dc = 1/4, so db = a/4
+            Assert.That( b.Grad[ 0 ], Is.EqualTo( 0.25f ).Within( 1e-6 ) ); // 1/4
+            Assert.That( b.Grad[ 1 ], Is.EqualTo( 0.5f ).Within( 1e-6 ) );  // 2/4
+            Assert.That( b.Grad[ 2 ], Is.EqualTo( 0.75f ).Within( 1e-6 ) ); // 3/4
+            Assert.That( b.Grad[ 3 ], Is.EqualTo( 1f ).Within( 1e-6 ) );    // 4/4
+        }
+        //------------------------------------------------------------------
     }
 }
