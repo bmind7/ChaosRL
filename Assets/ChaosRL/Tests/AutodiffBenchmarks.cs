@@ -166,6 +166,20 @@ namespace ChaosRL.Tests
             BenchmarkForwardBackward( new[] { 16, 16, 4 } );
         }
         //------------------------------------------------------------------
+        // Matrix Multiplication Benchmarks
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_MatMul_32x16_16x32()
+        {
+            BenchmarkMatMul( 32, 16, 32 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_MatMul_Forward_32x16_16x128()
+        {
+            BenchmarkMatMulForwardBackward( 32, 16, 128 );
+        }
+        //------------------------------------------------------------------
         private void BenchmarkOperation( int[] shape, string operation )
         {
             int size = 1;
@@ -437,6 +451,182 @@ namespace ChaosRL.Tests
             var result = (x * w).Tanh();
 
             // Sum reduction (manual for now)
+            float sum = 0f;
+            for (int i = 0; i < result.Size; i++)
+                sum += result.Data[ i ];
+
+            var loss = new Tensor( sum );
+            loss.Backward();
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkMatMul( int M, int K, int N )
+        {
+            Debug.Log( $"\n=== MatMul Benchmark ({M}×{K}) @ ({K}×{N}) -> ({M}×{N}) ===" );
+
+            // Warmup
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                RunValueMatMul( M, K, N );
+                RunTensorMatMul( M, K, N );
+            }
+
+            // Benchmark Value (scalar)
+            var swValue = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunValueMatMul( M, K, N );
+            }
+            swValue.Stop();
+
+            // Benchmark Tensor (vectorized)
+            var swTensor = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunTensorMatMul( M, K, N );
+            }
+            swTensor.Stop();
+
+            var valueMs = swValue.Elapsed.TotalMilliseconds;
+            var tensorMs = swTensor.Elapsed.TotalMilliseconds;
+            var speedup = valueMs / tensorMs;
+
+            Debug.Log( $"Value  (scalar):     {valueMs:F3} ms ({valueMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Tensor (vectorized): {tensorMs:F3} ms ({tensorMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Speedup: {speedup:F2}x" );
+        }
+        //------------------------------------------------------------------
+        private void RunValueMatMul( int M, int K, int N )
+        {
+            // Simulate matrix multiplication using scalar Values
+            var a = new Value[ M * K ];
+            var b = new Value[ K * N ];
+
+            for (int i = 0; i < M * K; i++)
+                a[ i ] = new Value( i * 0.01f );
+
+            for (int i = 0; i < K * N; i++)
+                b[ i ] = new Value( i * 0.01f );
+
+            // Manual matrix multiplication
+            var result = new Value[ M * N ];
+            for (int i = 0; i < M; i++)
+            {
+                for (int j = 0; j < N; j++)
+                {
+                    Value sum = 0f;
+                    for (int k = 0; k < K; k++)
+                    {
+                        sum = sum + (a[ i * K + k ] * b[ k * N + j ]);
+                    }
+                    result[ i * N + j ] = sum;
+                }
+            }
+        }
+        //------------------------------------------------------------------
+        private void RunTensorMatMul( int M, int K, int N )
+        {
+            var aData = new float[ M * K ];
+            var bData = new float[ K * N ];
+
+            for (int i = 0; i < M * K; i++)
+                aData[ i ] = i * 0.01f;
+
+            for (int i = 0; i < K * N; i++)
+                bData[ i ] = i * 0.01f;
+
+            var a = new Tensor( new[] { M, K }, aData );
+            var b = new Tensor( new[] { K, N }, bData );
+
+            _ = a.MatMul( b );
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkMatMulForwardBackward( int M, int K, int N )
+        {
+            Debug.Log( $"\n=== MatMul Forward+Backward ({M}×{K}) @ ({K}×{N}) ===" );
+
+            // Warmup
+            for (int i = 0; i < WarmupIterations; i++)
+            {
+                RunValueMatMulForwardBackward( M, K, N );
+                RunTensorMatMulForwardBackward( M, K, N );
+            }
+
+            // Benchmark Value
+            var swValue = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunValueMatMulForwardBackward( M, K, N );
+            }
+            swValue.Stop();
+
+            // Benchmark Tensor
+            var swTensor = Stopwatch.StartNew();
+            for (int i = 0; i < BenchmarkIterations; i++)
+            {
+                RunTensorMatMulForwardBackward( M, K, N );
+            }
+            swTensor.Stop();
+
+            var valueMs = swValue.Elapsed.TotalMilliseconds;
+            var tensorMs = swTensor.Elapsed.TotalMilliseconds;
+            var speedup = valueMs / tensorMs;
+
+            Debug.Log( $"Value  (scalar):     {valueMs:F3} ms ({valueMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Tensor (vectorized): {tensorMs:F3} ms ({tensorMs / BenchmarkIterations:F4} ms/iter)" );
+            Debug.Log( $"Speedup: {speedup:F2}x" );
+        }
+        //------------------------------------------------------------------
+        private void RunValueMatMulForwardBackward( int M, int K, int N )
+        {
+            var a = new Value[ M * K ];
+            var b = new Value[ K * N ];
+
+            for (int i = 0; i < M * K; i++)
+                a[ i ] = new Value( i * 0.01f );
+
+            for (int i = 0; i < K * N; i++)
+                b[ i ] = new Value( i * 0.01f );
+
+            // Matrix multiplication
+            var result = new Value[ M * N ];
+            for (int i = 0; i < M; i++)
+            {
+                for (int j = 0; j < N; j++)
+                {
+                    Value sum = 0f;
+                    for (int k = 0; k < K; k++)
+                    {
+                        sum = sum + (a[ i * K + k ] * b[ k * N + j ]);
+                    }
+                    result[ i * N + j ] = sum;
+                }
+            }
+
+            // Sum reduction and backward
+            Value total = 0f;
+            for (int i = 0; i < M * N; i++)
+                total = total + result[ i ];
+
+            total.Backward();
+        }
+        //------------------------------------------------------------------
+        private void RunTensorMatMulForwardBackward( int M, int K, int N )
+        {
+            var aData = new float[ M * K ];
+            var bData = new float[ K * N ];
+
+            for (int i = 0; i < M * K; i++)
+                aData[ i ] = i * 0.01f;
+
+            for (int i = 0; i < K * N; i++)
+                bData[ i ] = i * 0.01f;
+
+            var a = new Tensor( new[] { M, K }, aData );
+            var b = new Tensor( new[] { K, N }, bData );
+
+            var result = a.MatMul( b );
+
+            // Sum reduction
             float sum = 0f;
             for (int i = 0; i < result.Size; i++)
                 sum += result.Data[ i ];

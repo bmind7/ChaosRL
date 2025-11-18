@@ -282,6 +282,74 @@ namespace ChaosRL
             return result;
         }
         //------------------------------------------------------------------
+        /// <summary>
+        /// Matrix multiplication: (M×K) @ (K×N) -> (M×N)
+        /// Supports 2D tensors for now.
+        /// </summary>
+        public Tensor MatMul( Tensor other )
+        {
+            // Validate 2D tensors
+            if (Shape.Length != 2 || other.Shape.Length != 2)
+                throw new ArgumentException( "MatMul requires 2D tensors" );
+
+            int M = Shape[ 0 ]; // rows of this
+            int K = Shape[ 1 ]; // cols of this / rows of other
+            int N = other.Shape[ 1 ]; // cols of other
+
+            if (other.Shape[ 0 ] != K)
+                throw new ArgumentException( $"Inner dimensions must match: ({M}×{K}) @ ({other.Shape[ 0 ]}×{N})" );
+
+            var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
+
+            // Forward pass: C[i,j] = sum_k A[i,k] * B[k,j]
+            for (int i = 0; i < M; i++)
+            {
+                for (int j = 0; j < N; j++)
+                {
+                    float sum = 0f;
+                    for (int k = 0; k < K; k++)
+                    {
+                        sum += Data[ i * K + k ] * other.Data[ k * N + j ];
+                    }
+                    result.Data[ i * N + j ] = sum;
+                }
+            }
+
+            // Backward pass
+            result._backward = () =>
+            {
+                // dL/dA[i,k] = sum_j dL/dC[i,j] * B[k,j]
+                for (int i = 0; i < M; i++)
+                {
+                    for (int k = 0; k < K; k++)
+                    {
+                        float grad_sum = 0f;
+                        for (int j = 0; j < N; j++)
+                        {
+                            grad_sum += result.Grad[ i * N + j ] * other.Data[ k * N + j ];
+                        }
+                        Grad[ i * K + k ] += grad_sum;
+                    }
+                }
+
+                // dL/dB[k,j] = sum_i dL/dC[i,j] * A[i,k]
+                for (int k = 0; k < K; k++)
+                {
+                    for (int j = 0; j < N; j++)
+                    {
+                        float grad_sum = 0f;
+                        for (int i = 0; i < M; i++)
+                        {
+                            grad_sum += result.Grad[ i * N + j ] * Data[ i * K + k ];
+                        }
+                        other.Grad[ k * N + j ] += grad_sum;
+                    }
+                }
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
         public void Backward()
         {
             var topo = new List<Tensor>();
