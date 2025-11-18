@@ -181,6 +181,84 @@ namespace ChaosRL.Tests
         }
         //------------------------------------------------------------------
 
+        // Tensor-Only MatMul Benchmarks (various sizes)
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMul_64x64x64()
+        {
+            BenchmarkTensorMatMulOnly( 64, 64, 64 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMul_128x128x128()
+        {
+            BenchmarkTensorMatMulOnly( 128, 128, 128 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMul_256x256x256()
+        {
+            BenchmarkTensorMatMulOnly( 256, 256, 256 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMul_512x512x512()
+        {
+            BenchmarkTensorMatMulOnly( 512, 512, 512 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMul_1024x1024x1024()
+        {
+            BenchmarkTensorMatMulOnly( 1024, 1024, 1024 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMul_2048x2048x2048()
+        {
+            BenchmarkTensorMatMulOnly( 2048, 2048, 2048 );
+        }
+        //------------------------------------------------------------------
+
+        // Tensor-Only MatMul Benchmarks with Backward (various sizes)
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMulBackward_64x64x64()
+        {
+            BenchmarkTensorMatMulWithBackward( 64, 64, 64 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMulBackward_128x128x128()
+        {
+            BenchmarkTensorMatMulWithBackward( 128, 128, 128 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMulBackward_256x256x256()
+        {
+            BenchmarkTensorMatMulWithBackward( 256, 256, 256 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMulBackward_512x512x512()
+        {
+            BenchmarkTensorMatMulWithBackward( 512, 512, 512 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMulBackward_1024x1024x1024()
+        {
+            BenchmarkTensorMatMulWithBackward( 1024, 1024, 1024 );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_TensorMatMulBackward_2048x2048x2048()
+        {
+            BenchmarkTensorMatMulWithBackward( 2048, 2048, 2048 );
+        }
+        //------------------------------------------------------------------
+
         // Allocation Overhead Benchmarks
         //------------------------------------------------------------------
         [Test]
@@ -705,6 +783,95 @@ namespace ChaosRL.Tests
 
             var loss = new Tensor( sum );
             loss.Backward();
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkTensorMatMulOnly( int M, int K, int N )
+        {
+            const int warmup = 3;
+            const int iterations = 10;
+
+            Debug.Log( $"\n=== Tensor MatMul Benchmark: {M}×{K} @ {K}×{N} ===" );
+
+            // Pre-allocate and populate tensors once
+            var a = new Tensor( new[] { M, K } );
+            var b = new Tensor( new[] { K, N } );
+            for (int j = 0; j < M * K; j++)
+                a.Data[ j ] = j * 0.01f;
+            for (int j = 0; j < K * N; j++)
+                b.Data[ j ] = j * 0.01f;
+
+            // Warmup
+            for (int i = 0; i < warmup; i++)
+            {
+                _ = a.MatMul( b );
+            }
+
+            // Benchmark MatMul only
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < iterations; i++)
+            {
+                _ = a.MatMul( b );
+            }
+            sw.Stop();
+
+            var avgTime = sw.Elapsed.TotalMilliseconds / iterations;
+            var flops = 2.0 * M * K * N; // multiply-add counts as 2 operations
+            var gflops = (flops * iterations / sw.Elapsed.TotalSeconds) / 1e9;
+
+            Debug.Log( $"Average time: {avgTime:F3} ms" );
+            Debug.Log( $"Performance: {gflops:F2} GFLOPS" );
+        }
+        //------------------------------------------------------------------
+        private void BenchmarkTensorMatMulWithBackward( int M, int K, int N )
+        {
+            const int warmup = 3;
+            const int iterations = 10;
+
+            Debug.Log( $"\n=== Tensor MatMul + Backward Benchmark: {M}×{K} @ {K}×{N} ===" );
+
+            // Pre-allocate and populate tensors once
+            var a = new Tensor( new[] { M, K } );
+            var b = new Tensor( new[] { K, N } );
+            for (int j = 0; j < M * K; j++)
+                a.Data[ j ] = j * 0.01f;
+            for (int j = 0; j < K * N; j++)
+                b.Data[ j ] = j * 0.01f;
+
+            // Warmup
+            for (int i = 0; i < warmup; i++)
+            {
+                var result = a.MatMul( b );
+                float sum = 0f;
+                for (int k = 0; k < result.Size; k++)
+                    sum += result.Data[ k ];
+                var loss = new Tensor( sum );
+                loss.Backward();
+                a.ZeroGrad();
+                b.ZeroGrad();
+            }
+
+            // Benchmark MatMul + Backward
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < iterations; i++)
+            {
+                var result = a.MatMul( b );
+                float sum = 0f;
+                for (int k = 0; k < result.Size; k++)
+                    sum += result.Data[ k ];
+                var loss = new Tensor( sum );
+                loss.Backward();
+                a.ZeroGrad();
+                b.ZeroGrad();
+            }
+            sw.Stop();
+
+            var avgTime = sw.Elapsed.TotalMilliseconds / iterations;
+            // Forward: 2*M*K*N, Backward: ~4*M*K*N (two matmuls for gradients)
+            var flops = 6.0 * M * K * N;
+            var gflops = (flops * iterations / sw.Elapsed.TotalSeconds) / 1e9;
+
+            Debug.Log( $"Average time: {avgTime:F3} ms" );
+            Debug.Log( $"Performance: {gflops:F2} GFLOPS" );
         }
         //------------------------------------------------------------------
     }

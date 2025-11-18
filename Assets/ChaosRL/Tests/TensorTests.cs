@@ -494,6 +494,69 @@ namespace ChaosRL.Tests
         }
         //------------------------------------------------------------------
         [Test]
+        public void MatMul_Backward_MatchesValueImplementation()
+        {
+            // Test that Tensor.MatMul gradients match Value-based matmul
+            const int M = 2, K = 3, N = 2;
+
+            // Input data
+            var aData = new[] { 1f, 2f, 3f, 4f, 5f, 6f }; // 2×3
+            var bData = new[] { 0.5f, 0.7f, 0.3f, 0.9f, 0.2f, 0.4f }; // 3×2
+
+            // Tensor implementation
+            var tensorA = new Tensor( new[] { M, K }, aData );
+            var tensorB = new Tensor( new[] { K, N }, bData );
+            var tensorC = tensorA.MatMul( tensorB );
+            tensorC.Backward();
+
+            // Value implementation
+            var valueA = new Value[ M * K ];
+            var valueB = new Value[ K * N ];
+            for (int i = 0; i < M * K; i++)
+                valueA[ i ] = new Value( aData[ i ] );
+            for (int i = 0; i < K * N; i++)
+                valueB[ i ] = new Value( bData[ i ] );
+
+            // Manual matmul with Value
+            var valueC = new Value[ M * N ];
+            for (int i = 0; i < M; i++)
+            {
+                for (int j = 0; j < N; j++)
+                {
+                    Value sum = 0f;
+                    for (int k = 0; k < K; k++)
+                    {
+                        sum = sum + (valueA[ i * K + k ] * valueB[ k * N + j ]);
+                    }
+                    valueC[ i * N + j ] = sum;
+                }
+            }
+
+            // Backward pass for Value
+            for (int i = 0; i < M * N; i++)
+                valueC[ i ].Backward();
+
+            // Compare forward results
+            for (int i = 0; i < M * N; i++)
+            {
+                Assert.That( tensorC.Data[ i ], Is.EqualTo( valueC[ i ].Data ).Within( 1e-5 ),
+                    $"Forward pass mismatch at index {i}" );
+            }
+
+            // Compare gradients
+            for (int i = 0; i < M * K; i++)
+            {
+                Assert.That( tensorA.Grad[ i ], Is.EqualTo( valueA[ i ].Grad ).Within( 1e-5 ),
+                    $"Gradient mismatch for A at index {i}" );
+            }
+            for (int i = 0; i < K * N; i++)
+            {
+                Assert.That( tensorB.Grad[ i ], Is.EqualTo( valueB[ i ].Grad ).Within( 1e-5 ),
+                    $"Gradient mismatch for B at index {i}" );
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
         public void MatMul_InvalidDimensions_ThrowsException()
         {
             var a = new Tensor( new[] { 2, 3 } );
