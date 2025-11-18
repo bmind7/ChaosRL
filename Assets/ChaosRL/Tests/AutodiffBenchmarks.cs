@@ -180,6 +180,78 @@ namespace ChaosRL.Tests
             BenchmarkMatMulForwardBackward( 32, 16, 128 );
         }
         //------------------------------------------------------------------
+
+        // Allocation Overhead Benchmarks
+        //------------------------------------------------------------------
+        [Test]
+        public void Benchmark_Value_Allocation_Overhead()
+        {
+            const int size = 1024;
+            const int iterations = 1000;
+
+            Debug.Log( "\n=== Value Allocation Overhead Analysis ===" );
+            Debug.Log( $"Size: {size}, Iterations: {iterations}\n" );
+
+            // Benchmark 1: Just allocation
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                var values = new Value[ size ];
+                for (int i = 0; i < size; i++)
+                    values[ i ] = new Value( i * 0.1f );
+            }
+            sw.Stop();
+            var allocTime = sw.Elapsed.TotalMilliseconds;
+            Debug.Log( $"Allocation only: {allocTime:F3} ms" );
+
+            // Benchmark 2: Allocation + simple operation
+            sw.Restart();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                var values1 = new Value[ size ];
+                var values2 = new Value[ size ];
+                for (int i = 0; i < size; i++)
+                {
+                    values1[ i ] = new Value( i * 0.1f );
+                    values2[ i ] = new Value( (size - i) * 0.1f );
+                }
+
+                for (int i = 0; i < size; i++)
+                    _ = values1[ i ] + values2[ i ];
+            }
+            sw.Stop();
+            var totalTime = sw.Elapsed.TotalMilliseconds;
+            Debug.Log( $"Allocation + Addition: {totalTime:F3} ms" );
+
+            // Total three allocations happened values1, values2, and Value during sumation
+            var computeTime = totalTime - 3 * allocTime;
+            var allocPercent = (3 * allocTime / totalTime) * 100;
+            var computePercent = (computeTime / totalTime) * 100;
+
+            Debug.Log( $"Computation only: {computeTime:F3} ms" );
+            Debug.Log( $"Allocation overhead: {allocPercent:F1}%" );
+            Debug.Log( $"Computation: {computePercent:F1}%" );
+
+            // Compare with Tensor (pre-allocated)
+            sw.Restart();
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                var t1 = new Tensor( new int[] { size } );
+                var t2 = new Tensor( new int[] { size } );
+                for (int i = 0; i < size; i++)
+                {
+                    t1.Data[ i ] = i * 0.1f;
+                    t2.Data[ i ] = (size - i) * 0.1f;
+                }
+                _ = t1 + t2;
+            }
+            sw.Stop();
+            var tensorTime = sw.Elapsed.TotalMilliseconds;
+
+            Debug.Log( $"Tensor (with allocation): {tensorTime:F3} ms" );
+            Debug.Log( $"Speedup over Value: {totalTime / tensorTime:F2}x" );
+        }
+        //------------------------------------------------------------------
         private void BenchmarkOperation( int[] shape, string operation )
         {
             int size = 1;
