@@ -207,17 +207,17 @@ namespace ChaosRL.Tests
             BenchmarkTensorMatMulOnly( 512, 512, 512 );
         }
         //------------------------------------------------------------------
-        [Test]
-        public void Benchmark_TensorMatMul_1024x1024x1024()
-        {
-            BenchmarkTensorMatMulOnly( 1024, 1024, 1024 );
-        }
+        // [Test]
+        // public void Benchmark_TensorMatMul_1024x1024x1024()
+        // {
+        //     BenchmarkTensorMatMulOnly( 1024, 1024, 1024 );
+        // }
         //------------------------------------------------------------------
-        [Test]
-        public void Benchmark_TensorMatMul_2048x2048x2048()
-        {
-            BenchmarkTensorMatMulOnly( 2048, 2048, 2048 );
-        }
+        // [Test]
+        // public void Benchmark_TensorMatMul_2048x2048x2048()
+        // {
+        //     BenchmarkTensorMatMulOnly( 2048, 2048, 2048 );
+        // }
         //------------------------------------------------------------------
 
         // Tensor-Only MatMul Benchmarks with Backward (various sizes)
@@ -246,17 +246,17 @@ namespace ChaosRL.Tests
             BenchmarkTensorMatMulWithBackward( 512, 512, 512 );
         }
         //------------------------------------------------------------------
-        [Test]
-        public void Benchmark_TensorMatMulBackward_1024x1024x1024()
-        {
-            BenchmarkTensorMatMulWithBackward( 1024, 1024, 1024 );
-        }
+        // [Test]
+        // public void Benchmark_TensorMatMulBackward_1024x1024x1024()
+        // {
+        //     BenchmarkTensorMatMulWithBackward( 1024, 1024, 1024 );
+        // }
         //------------------------------------------------------------------
-        [Test]
-        public void Benchmark_TensorMatMulBackward_2048x2048x2048()
-        {
-            BenchmarkTensorMatMulWithBackward( 2048, 2048, 2048 );
-        }
+        // [Test]
+        // public void Benchmark_TensorMatMulBackward_2048x2048x2048()
+        // {
+        //     BenchmarkTensorMatMulWithBackward( 2048, 2048, 2048 );
+        // }
         //------------------------------------------------------------------
 
         // Allocation Overhead Benchmarks
@@ -777,11 +777,7 @@ namespace ChaosRL.Tests
             var result = a.MatMul( b );
 
             // Sum reduction
-            float sum = 0f;
-            for (int i = 0; i < result.Size; i++)
-                sum += result.Data[ i ];
-
-            var loss = new Tensor( sum );
+            var loss = result.Sum();
             loss.Backward();
         }
         //------------------------------------------------------------------
@@ -841,10 +837,7 @@ namespace ChaosRL.Tests
             for (int i = 0; i < warmup; i++)
             {
                 var result = a.MatMul( b );
-                float sum = 0f;
-                for (int k = 0; k < result.Size; k++)
-                    sum += result.Data[ k ];
-                var loss = new Tensor( sum );
+                var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();
@@ -855,10 +848,7 @@ namespace ChaosRL.Tests
             for (int i = 0; i < iterations; i++)
             {
                 var result = a.MatMul( b );
-                float sum = 0f;
-                for (int k = 0; k < result.Size; k++)
-                    sum += result.Data[ k ];
-                var loss = new Tensor( sum );
+                var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();

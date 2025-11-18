@@ -592,5 +592,125 @@ namespace ChaosRL.Tests
             Assert.That( weights.Grad[ 0 ], Is.Not.EqualTo( 0.0f ).Or.EqualTo( 0.0f ) );
         }
         //------------------------------------------------------------------
+        [Test]
+        public void Sum_AllDimensions_ComputesCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var sum = a.Sum();
+
+            Assert.That( sum.Shape, Is.EqualTo( new[] { 1 } ) );
+            Assert.That( sum.Data[ 0 ], Is.EqualTo( 21f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_AllDimensions_BackwardBroadcastsCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var sum = a.Sum();
+
+            sum.Backward();
+
+            // Gradient should be 1.0 for all elements
+            for (int i = 0; i < a.Size; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_AlongDimension0_ComputesCorrectly()
+        {
+            // Shape [2, 3]: [[1, 2, 3], [4, 5, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var sum = a.Sum( 0 ); // Sum along rows
+
+            // Result shape should be [3]
+            Assert.That( sum.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( sum.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) );  // 1 + 4
+            Assert.That( sum.Data[ 1 ], Is.EqualTo( 7f ).Within( 1e-6 ) );  // 2 + 5
+            Assert.That( sum.Data[ 2 ], Is.EqualTo( 9f ).Within( 1e-6 ) );  // 3 + 6
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_AlongDimension1_ComputesCorrectly()
+        {
+            // Shape [2, 3]: [[1, 2, 3], [4, 5, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var sum = a.Sum( 1 ); // Sum along columns
+
+            // Result shape should be [2]
+            Assert.That( sum.Shape, Is.EqualTo( new[] { 2 } ) );
+            Assert.That( sum.Data[ 0 ], Is.EqualTo( 6f ).Within( 1e-6 ) );   // 1 + 2 + 3
+            Assert.That( sum.Data[ 1 ], Is.EqualTo( 15f ).Within( 1e-6 ) );  // 4 + 5 + 6
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_AlongDimension_BackwardBroadcastsCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var sum = a.Sum( 1 ); // Sum along columns -> shape [2]
+
+            sum.Backward();
+
+            // Gradient should broadcast: each row element gets gradient from corresponding output
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 4 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 5 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_3DTensor_AlongMiddleDimension()
+        {
+            // Shape [2, 3, 4]: 2 matrices of 3×4
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = i + 1;
+
+            var sum = a.Sum( 1 ); // Sum along dimension 1
+
+            // Result shape should be [2, 4]
+            Assert.That( sum.Shape, Is.EqualTo( new[] { 2, 4 } ) );
+            Assert.That( sum.Size, Is.EqualTo( 8 ) );
+
+            // First matrix: indices 0-11, sum along rows (3 rows)
+            // Column 0: 1 + 5 + 9 = 15
+            Assert.That( sum.Data[ 0 ], Is.EqualTo( 15f ).Within( 1e-6 ) );
+            // Column 1: 2 + 6 + 10 = 18
+            Assert.That( sum.Data[ 1 ], Is.EqualTo( 18f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_InvalidDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => a.Sum( -3 ) );
+            Assert.Throws<ArgumentException>( () => a.Sum( 2 ) );
+            Assert.Throws<ArgumentException>( () => a.Sum( 5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sum_ChainedWithOperations_ComputesGradientsCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = new Tensor( new[] { 2, 3 }, new[] { 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f } );
+
+            var c = a * b;
+            var sum = c.Sum();
+
+            Assert.That( sum.Data[ 0 ], Is.EqualTo( 10.5f ).Within( 1e-6 ) );
+
+            sum.Backward();
+
+            // dc/da = b, dsum/dc = 1, so da = b
+            for (int i = 0; i < a.Size; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 0.5f ).Within( 1e-6 ) );
+
+            // dc/db = a, dsum/dc = 1, so db = a
+            for (int i = 0; i < b.Size; i++)
+                Assert.That( b.Grad[ i ], Is.EqualTo( a.Data[ i ] ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
     }
 }

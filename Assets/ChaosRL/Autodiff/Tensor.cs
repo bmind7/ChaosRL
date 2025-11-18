@@ -350,6 +350,105 @@ namespace ChaosRL
             return result;
         }
         //------------------------------------------------------------------
+        /// <summary>
+        /// Sum all elements to a scalar tensor.
+        /// </summary>
+        public Tensor Sum()
+        {
+            var result = new Tensor( new[] { 1 }, new[] { this }, "sum" );
+
+            float sum = 0f;
+            for (int i = 0; i < Size; i++)
+                sum += Data[ i ];
+            result.Data[ 0 ] = sum;
+
+            result._backward = () =>
+            {
+                // Gradient broadcasts to all input elements
+                for (int i = 0; i < Size; i++)
+                    Grad[ i ] += result.Grad[ 0 ];
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Sum along a specific dimension.
+        /// For example, if shape is [2, 3, 4] and dim=1, result shape is [2, 4].
+        /// </summary>
+        public Tensor Sum( int dim )
+        {
+            int rank = Shape.Length;
+
+            // Support negative dims
+            if (dim < 0) dim += rank;
+            if (dim < 0 || dim >= rank)
+                throw new ArgumentException(
+                    $"Dimension {dim} out of range for shape with {rank} dimensions" );
+
+            // Build output shape by dropping the reduced dim
+            var outShape = new int[ rank - 1 ];
+            for (int i = 0, j = 0; i < rank; i++)
+                if (i != dim)
+                    outShape[ j++ ] = Shape[ i ];
+
+            // Edge case: full reduction -> scalar
+            if (outShape.Length == 0)
+                return Sum(); // your existing full sum
+
+            var result = new Tensor( outShape, new[] { this }, $"sum(dim={dim})" );
+
+            int dimSize = Shape[ dim ];
+
+            // innerSize = product of sizes after "dim"
+            int innerSize = 1;
+            for (int i = dim + 1; i < rank; i++)
+                innerSize *= Shape[ i ];
+
+            // blockSize = dimSize * innerSize = number of elements in one [dim, inner] block
+            int blockSize = dimSize * innerSize;
+
+            // outerSize = how many such blocks we have (product of sizes before "dim")
+            int outerSize = Size / blockSize;
+
+            // Forward: for each (outer, inner) sum over dim
+            for (int outer = 0; outer < outerSize; outer++)
+            {
+                int baseBlock = outer * blockSize;
+
+                for (int inner = 0; inner < innerSize; inner++)
+                {
+                    int baseIdx = baseBlock + inner;
+                    float sum = 0f;
+
+                    for (int d = 0; d < dimSize; d++)
+                        sum += Data[ baseIdx + d * innerSize ];
+
+                    result.Data[ outer * innerSize + inner ] = sum;
+                }
+            }
+
+            // Backward: broadcast grad back over reduced dim
+            result._backward = () =>
+            {
+                for (int outer = 0; outer < outerSize; outer++)
+                {
+                    int baseBlock = outer * blockSize;
+
+                    for (int inner = 0; inner < innerSize; inner++)
+                    {
+                        int baseIdx = baseBlock + inner;
+                        float g = result.Grad[ outer * innerSize + inner ];
+
+                        for (int d = 0; d < dimSize; d++)
+                            Grad[ baseIdx + d * innerSize ] += g;
+                    }
+                }
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
         public void Backward()
         {
             var topo = new List<Tensor>();
