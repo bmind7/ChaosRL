@@ -988,5 +988,335 @@ namespace ChaosRL.Tests
             Assert.That( b.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
         }
         //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_AtBeginning_AddsFirstDimension()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Unsqueeze( 0 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 1, 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_InMiddle_AddsMiddleDimension()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Unsqueeze( 1 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 1, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_AtEnd_AddsLastDimension()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Unsqueeze( 2 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3, 1 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_NegativeIndex_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // -1 means after last dimension (same as index 2)
+            var b = a.Unsqueeze( -1 );
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3, 1 } ) );
+
+            // -2 means before last dimension (same as index 1)
+            var c = a.Unsqueeze( -2 );
+            Assert.That( c.Shape, Is.EqualTo( new[] { 2, 1, 3 } ) );
+
+            // -3 means before first dimension (same as index 0)
+            var d = a.Unsqueeze( -3 );
+            Assert.That( d.Shape, Is.EqualTo( new[] { 1, 2, 3 } ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_1DTensor_To2D()
+        {
+            var a = new Tensor( new[] { 5 }, new[] { 1f, 2f, 3f, 4f, 5f } );
+
+            // Add batch dimension at start: [5] -> [1, 5]
+            var b = a.Unsqueeze( 0 );
+            Assert.That( b.Shape, Is.EqualTo( new[] { 1, 5 } ) );
+
+            // Add dimension at end: [5] -> [5, 1]
+            var c = a.Unsqueeze( 1 );
+            Assert.That( c.Shape, Is.EqualTo( new[] { 5, 1 } ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_InvalidDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            // Too large
+            Assert.Throws<ArgumentException>( () => a.Unsqueeze( 3 ) );
+            Assert.Throws<ArgumentException>( () => a.Unsqueeze( 10 ) );
+
+            // Too negative
+            Assert.Throws<ArgumentException>( () => a.Unsqueeze( -4 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f } );
+            var b = a.Unsqueeze( 0 ); // [1, 3]
+            var c = b * 2f;
+
+            c.Backward();
+
+            // Gradients should flow through shared arrays
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+
+            // b's gradient is the same array
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Unsqueeze_MatMulUseCase_WorksCorrectly()
+        {
+            // Common use case: converting 1D to 2D for matrix multiplication
+            var input = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f } );
+            var weights = new Tensor( new[] { 3, 2 }, new[] { 0.5f, 0.7f, 0.3f, 0.9f, 0.2f, 0.4f } );
+
+            // Unsqueeze to add batch dimension: [3] -> [1, 3]
+            var input2D = input.Unsqueeze( 0 );
+            Assert.That( input2D.Shape, Is.EqualTo( new[] { 1, 3 } ) );
+
+            // Now we can do matmul: [1, 3] @ [3, 2] -> [1, 2]
+            var output = input2D.MatMul( weights );
+            Assert.That( output.Shape, Is.EqualTo( new[] { 1, 2 } ) );
+
+            output.Backward();
+
+            // Gradients should flow back correctly
+            Assert.That( input.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+            Assert.That( weights.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_RemovesAllSingleDimensions()
+        {
+            var a = new Tensor( new[] { 1, 2, 1, 3, 1 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Squeeze();
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_SpecificDimension_RemovesThatDimension()
+        {
+            var a = new Tensor( new[] { 1, 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Squeeze( 0 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_MiddleDimension_RemovesCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 1, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Squeeze( 1 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_LastDimension_RemovesCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3, 1 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Squeeze( 2 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Should share the same data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_NegativeIndex_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 1, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // -2 means middle dimension (same as index 1)
+            var b = a.Squeeze( -2 );
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_NonSingleDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            // Cannot squeeze dimension with size > 1
+            Assert.Throws<ArgumentException>( () => a.Squeeze( 0 ) );
+            Assert.Throws<ArgumentException>( () => a.Squeeze( 1 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_InvalidDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 1, 2, 3 } );
+
+            // Out of range
+            Assert.Throws<ArgumentException>( () => a.Squeeze( 3 ) );
+            Assert.Throws<ArgumentException>( () => a.Squeeze( -4 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_AllDimensionsAreOne_KeepsScalar()
+        {
+            var a = new Tensor( new[] { 1, 1, 1 }, new[] { 5f } );
+
+            var b = a.Squeeze();
+
+            // Should keep as [1] scalar tensor
+            Assert.That( b.Shape, Is.EqualTo( new[] { 1 } ) );
+            Assert.That( b.Size, Is.EqualTo( 1 ) );
+            Assert.That( b.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_NoDimensionsToRemove_ReturnsView()
+        {
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            var b = a.Squeeze();
+
+            // No dimensions of size 1, but should still return a view
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3, 4 } ) );
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 1, 3 }, new[] { 1f, 2f, 3f } );
+            var b = a.Squeeze( 0 ); // [3]
+            var c = b * 3f;
+
+            c.Backward();
+
+            // Gradients should flow through shared arrays
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+
+            // b's gradient is the same array
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_AfterMatMul_RemovesBatchDimension()
+        {
+            // Common use case: removing batch dimension after matmul
+            var input = new Tensor( new[] { 1, 3 }, new[] { 1f, 2f, 3f } );
+            var weights = new Tensor( new[] { 3, 2 }, new[] { 0.5f, 0.7f, 0.3f, 0.9f, 0.2f, 0.4f } );
+
+            // Matmul: [1, 3] @ [3, 2] -> [1, 2]
+            var output2D = input.MatMul( weights );
+            Assert.That( output2D.Shape, Is.EqualTo( new[] { 1, 2 } ) );
+
+            // Squeeze to remove batch dimension: [1, 2] -> [2]
+            var output = output2D.Squeeze( 0 );
+            Assert.That( output.Shape, Is.EqualTo( new[] { 2 } ) );
+
+            output.Backward();
+
+            // Gradients should flow back correctly
+            Assert.That( input.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+            Assert.That( weights.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void UnsqueezeAndSqueeze_RoundTrip_PreservesShape()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // Unsqueeze then squeeze should give back original shape
+            var b = a.Unsqueeze( 0 );  // [1, 2, 3]
+            var c = b.Squeeze( 0 );    // [2, 3]
+
+            Assert.That( c.Shape, Is.EqualTo( a.Shape ) );
+            Assert.That( c.Size, Is.EqualTo( a.Size ) );
+
+            // All should share same data/grad arrays
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( b.Data, c.Data );
+            Assert.AreSame( a.Grad, c.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void UnsqueezeAndSqueeze_ComplexChain_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f } );
+            var b = a.Unsqueeze( 0 );  // [1, 3]
+            var c = b * 2f;            // [1, 3]
+            var d = c.Squeeze( 0 );    // [3]
+            var e = d + 5f;            // [3]
+
+            e.Backward();
+
+            // Gradient should be 2 (from multiplication) for all elements
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Squeeze_Multiple_WorksSequentially()
+        {
+            var a = new Tensor( new[] { 1, 2, 1, 3, 1 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // Squeeze specific dimensions one by one
+            var b = a.Squeeze( 0 );  // [2, 1, 3, 1]
+            var c = b.Squeeze( 1 );  // [2, 3, 1]
+            var d = c.Squeeze( 2 );  // [2, 3]
+
+            Assert.That( d.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+
+            // All should share same data
+            Assert.AreSame( a.Data, d.Data );
+            Assert.AreSame( a.Grad, d.Grad );
+        }
+        //------------------------------------------------------------------
     }
 }

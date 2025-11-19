@@ -637,6 +637,117 @@ namespace ChaosRL
             return broadcasted;
         }
         //------------------------------------------------------------------
+        /// <summary>
+        /// Adds a dimension of size 1 at the specified position (PyTorch: unsqueeze).
+        /// This is a view operation - shares the same Data and Grad arrays.
+        /// </summary>
+        /// <param name="dim">Dimension index where to insert the new axis. Supports negative indexing.</param>
+        /// <returns>New tensor view with expanded shape</returns>
+        public Tensor Unsqueeze( int dim )
+        {
+            int rank = Shape.Length;
+
+            // Support negative indexing: -1 means after last dim
+            if (dim < 0) dim += rank + 1;
+            if (dim < 0 || dim > rank)
+                throw new ArgumentException(
+                    $"Dimension {dim} out of range for tensor with {rank} dimensions (valid range: -{rank - 1} to {rank})" );
+
+            // Build new shape with inserted dimension
+            var newShape = new int[ rank + 1 ];
+            for (int i = 0; i < dim; i++)
+                newShape[ i ] = Shape[ i ];
+            newShape[ dim ] = 1;
+            for (int i = dim; i < rank; i++)
+                newShape[ i + 1 ] = Shape[ i ];
+
+            // Create view tensor sharing data/grad
+            var result = new Tensor( newShape, new[] { this }, $"unsqueeze({dim})" );
+            result.Data = this.Data; // Share data array
+            result.Grad = this.Grad; // Share grad array
+
+            result._backward = () =>
+            {
+                // Gradients already shared, nothing to do
+                // The parent's grad array is the same as result's grad array
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Removes dimensions of size 1 (PyTorch: squeeze).
+        /// This is a view operation - shares the same Data and Grad arrays.
+        /// </summary>
+        /// <param name="dim">Optional dimension to squeeze. If null, removes all dimensions of size 1.</param>
+        /// <returns>New tensor view with reduced shape</returns>
+        public Tensor Squeeze( int? dim = null )
+        {
+            int rank = Shape.Length;
+
+            if (dim.HasValue)
+            {
+                // Squeeze specific dimension
+                int d = dim.Value;
+
+                // Support negative indexing
+                if (d < 0) d += rank;
+                if (d < 0 || d >= rank)
+                    throw new ArgumentException(
+                        $"Dimension {dim.Value} out of range for tensor with {rank} dimensions" );
+
+                if (Shape[ d ] != 1)
+                    throw new ArgumentException(
+                        $"Cannot squeeze dimension {d} with size {Shape[ d ]} (must be 1)" );
+
+                // Build new shape without the squeezed dimension
+                var newShape = new int[ rank - 1 ];
+                for (int i = 0, j = 0; i < rank; i++)
+                    if (i != d)
+                        newShape[ j++ ] = Shape[ i ];
+
+                // Handle edge case: squeezing last dimension results in empty shape
+                if (newShape.Length == 0)
+                    newShape = new[] { 1 }; // Keep as scalar [1]
+
+                var result = new Tensor( newShape, new[] { this }, $"squeeze({d})" );
+                result.Data = this.Data; // Share data array
+                result.Grad = this.Grad; // Share grad array
+
+                result._backward = () =>
+                {
+                    // Gradients already shared, nothing to do
+                };
+
+                return result;
+            }
+            else
+            {
+                // Squeeze all dimensions of size 1
+                var newShapeList = new List<int>();
+                for (int i = 0; i < rank; i++)
+                    if (Shape[ i ] != 1)
+                        newShapeList.Add( Shape[ i ] );
+
+                // If all dimensions were 1, keep as scalar
+                if (newShapeList.Count == 0)
+                    newShapeList.Add( 1 );
+
+                var newShape = newShapeList.ToArray();
+
+                var result = new Tensor( newShape, new[] { this }, "squeeze()" );
+                result.Data = this.Data; // Share data array
+                result.Grad = this.Grad; // Share grad array
+
+                result._backward = () =>
+                {
+                    // Gradients already shared, nothing to do
+                };
+
+                return result;
+            }
+        }
+        //------------------------------------------------------------------
         public override string ToString()
         {
             var sb = new StringBuilder();
