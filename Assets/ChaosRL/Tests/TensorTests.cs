@@ -101,6 +101,105 @@ namespace ChaosRL.Tests
         }
         //------------------------------------------------------------------
         [Test]
+        public void Add_IncompatibleShapesForBroadcast_ThrowsException()
+        {
+            // Size not a clean multiple
+            var a = new Tensor( new[] { 5 }, new[] { 1f, 2f, 3f, 4f, 5f } );
+            var b = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f } );
+
+            Assert.Throws<ArgumentException>( () => { var c = a + b; } );
+
+            // Multi-dimensional mismatch
+            var m1 = new Tensor( new[] { 2, 3 } );
+            var m2 = new Tensor( new[] { 2, 4 } );
+
+            Assert.Throws<ArgumentException>( () => { var c = m1 + m2; } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Add_ScalarBroadcast_ComputesForwardAndBackward()
+        {
+            // Scalar broadcasted to larger tensor
+            var scalar = new Tensor( 2.0f );
+            var tensor = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f } );
+
+            var result = scalar + tensor;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // Scalar gradient should accumulate from all elements
+            Assert.That( scalar.Grad[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Add_1DBroadcastTo2D_ComputesForwardAndBackward()
+        {
+            // Bias addition: [2,3] + [3]
+            var matrix = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var bias = new Tensor( new[] { 3 }, new[] { 0.1f, 0.2f, 0.3f } );
+
+            var result = matrix + bias;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // First row: [1+0.1, 2+0.2, 3+0.3]
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 1.1f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 2.2f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 3.3f ).Within( 1e-6 ) );
+            // Second row: [4+0.1, 5+0.2, 6+0.3]
+            Assert.That( result.Data[ 3 ], Is.EqualTo( 4.1f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 4 ], Is.EqualTo( 5.2f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 5 ], Is.EqualTo( 6.3f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // Matrix gradient is 1 everywhere
+            for (int i = 0; i < 6; i++)
+                Assert.That( matrix.Grad[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+
+            // Bias gradient accumulates from both rows
+            Assert.That( bias.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( bias.Grad[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( bias.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Add_LargerTensorMultipleOfSmaller_ComputesCorrectly()
+        {
+            // [6] + [2] where 6 = 3 * 2
+            var large = new Tensor( new[] { 6 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var small = new Tensor( new[] { 2 }, new[] { 10f, 20f } );
+
+            var result = large + small;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 6 } ) );
+            // Pattern repeats: [1+10, 2+20, 3+10, 4+20, 5+10, 6+20]
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 11f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 22f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 13f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 3 ], Is.EqualTo( 24f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 4 ], Is.EqualTo( 15f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 5 ], Is.EqualTo( 26f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // Large tensor gradient is 1 everywhere
+            for (int i = 0; i < 6; i++)
+                Assert.That( large.Grad[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+
+            // Small tensor gradient accumulates from 3 repetitions
+            Assert.That( small.Grad[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( small.Grad[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
         public void Multiply_TwoTensors_ComputesForwardAndBackward()
         {
             var a = new Tensor( new[] { 2 }, new[] { 2.0f, 4.0f } );
@@ -116,6 +215,65 @@ namespace ChaosRL.Tests
             Assert.That( a.Grad[ 1 ], Is.EqualTo( 5.0f ).Within( 1e-6 ) );
             Assert.That( b.Grad[ 0 ], Is.EqualTo( 2.0f ).Within( 1e-6 ) );
             Assert.That( b.Grad[ 1 ], Is.EqualTo( 4.0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Multiply_ScalarBroadcast_ComputesForwardAndBackward()
+        {
+            var tensor = new Tensor( new[] { 3 }, new[] { 2f, 3f, 4f } );
+            var scalar = new Tensor( 2.0f );
+
+            var result = tensor * scalar;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 8f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // d(tensor * scalar)/dtensor = scalar
+            Assert.That( tensor.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+
+            // d(tensor * scalar)/dscalar = sum(tensor)
+            Assert.That( scalar.Grad[ 0 ], Is.EqualTo( 9f ).Within( 1e-6 ) ); // 2+3+4
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Multiply_1DBroadcastTo2D_ComputesForwardAndBackward()
+        {
+            // Element-wise scaling: [2,3] * [3]
+            var matrix = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var scale = new Tensor( new[] { 3 }, new[] { 2f, 3f, 4f } );
+
+            var result = matrix * scale;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // First row: [1*2, 2*3, 3*4]
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 12f ).Within( 1e-6 ) );
+            // Second row: [4*2, 5*3, 6*4]
+            Assert.That( result.Data[ 3 ], Is.EqualTo( 8f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 4 ], Is.EqualTo( 15f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 5 ], Is.EqualTo( 24f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // d(matrix * scale)/dmatrix = scale (broadcasted)
+            Assert.That( matrix.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 2 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 3 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 4 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 5 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+
+            // d(matrix * scale)/dscale accumulates from both rows
+            Assert.That( scale.Grad[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) ); // 1+4
+            Assert.That( scale.Grad[ 1 ], Is.EqualTo( 7f ).Within( 1e-6 ) ); // 2+5
+            Assert.That( scale.Grad[ 2 ], Is.EqualTo( 9f ).Within( 1e-6 ) ); // 3+6
         }
         //------------------------------------------------------------------
         [Test]
@@ -166,6 +324,66 @@ namespace ChaosRL.Tests
             // dc/db = -a/b^2
             Assert.That( b.Grad[ 0 ], Is.EqualTo( -2.0f ).Within( 1e-6 ) );
             Assert.That( b.Grad[ 1 ], Is.EqualTo( -12.0f / 9.0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Divide_ScalarBroadcast_ComputesForwardAndBackward()
+        {
+            var tensor = new Tensor( new[] { 3 }, new[] { 6f, 9f, 12f } );
+            var scalar = new Tensor( 3f );
+
+            var result = tensor / scalar;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // d(tensor / scalar)/dtensor = 1/scalar
+            Assert.That( tensor.Grad[ 0 ], Is.EqualTo( 1f / 3f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 1 ], Is.EqualTo( 1f / 3f ).Within( 1e-6 ) );
+            Assert.That( tensor.Grad[ 2 ], Is.EqualTo( 1f / 3f ).Within( 1e-6 ) );
+
+            // d(tensor / scalar)/dscalar = -sum(tensor / scalar^2)
+            // = -(6/9 + 9/9 + 12/9) = -(2/3 + 1 + 4/3) = -3
+            Assert.That( scalar.Grad[ 0 ], Is.EqualTo( -3f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Divide_1DBroadcastTo2D_ComputesForwardAndBackward()
+        {
+            // [2,3] / [3]
+            var matrix = new Tensor( new[] { 2, 3 }, new[] { 6f, 9f, 12f, 3f, 6f, 9f } );
+            var divisor = new Tensor( new[] { 3 }, new[] { 2f, 3f, 4f } );
+
+            var result = matrix / divisor;
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // First row: [6/2, 9/3, 12/4]
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            // Second row: [3/2, 6/3, 9/4]
+            Assert.That( result.Data[ 3 ], Is.EqualTo( 1.5f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 4 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 5 ], Is.EqualTo( 2.25f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // d(matrix / divisor)/dmatrix = 1/divisor (broadcasted)
+            Assert.That( matrix.Grad[ 0 ], Is.EqualTo( 0.5f ).Within( 1e-6 ) );  // 1/2
+            Assert.That( matrix.Grad[ 1 ], Is.EqualTo( 1f / 3f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 2 ], Is.EqualTo( 0.25f ).Within( 1e-6 ) ); // 1/4
+            Assert.That( matrix.Grad[ 3 ], Is.EqualTo( 0.5f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 4 ], Is.EqualTo( 1f / 3f ).Within( 1e-6 ) );
+            Assert.That( matrix.Grad[ 5 ], Is.EqualTo( 0.25f ).Within( 1e-6 ) );
+
+            // d(matrix / divisor)/ddivisor accumulates: -matrix/divisor^2
+            Assert.That( divisor.Grad[ 0 ], Is.EqualTo( -(6f / 4f + 3f / 4f) ).Within( 1e-5 ) ); // -(6/4 + 3/4)
+            Assert.That( divisor.Grad[ 1 ], Is.EqualTo( -(9f / 9f + 6f / 9f) ).Within( 1e-5 ) ); // -(9/9 + 6/9)
+            Assert.That( divisor.Grad[ 2 ], Is.EqualTo( -(12f / 16f + 9f / 16f) ).Within( 1e-5 ) ); // -(12/16 + 9/16)
         }
         //------------------------------------------------------------------
         [Test]
@@ -316,6 +534,122 @@ namespace ChaosRL.Tests
             Assert.That( a.Grad[ 1 ], Is.EqualTo( 1.0f ).Within( 1e-6 ) );
             Assert.That( b.Grad[ 0 ], Is.EqualTo( 1.0f ).Within( 1e-6 ) );
             Assert.That( b.Grad[ 1 ], Is.EqualTo( 0.0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_ScalarBroadcast_ComputesForwardAndBackward()
+        {
+            var tensor = new Tensor( new[] { 3 }, new[] { 1f, 5f, 3f } );
+            var scalar = new Tensor( 4f );
+
+            var result = Tensor.Max( tensor, scalar );
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // Gradient flows to whichever is larger
+            Assert.That( tensor.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // scalar wins
+            Assert.That( tensor.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // tensor wins
+            Assert.That( tensor.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // scalar wins
+
+            // Scalar accumulates from positions where it wins
+            Assert.That( scalar.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_1DBroadcastTo2D_ComputesForwardAndBackward()
+        {
+            // [2,3] max [3]
+            var matrix = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 4f, 6f } );
+            var vector = new Tensor( new[] { 3 }, new[] { 3f, 4f, 5f } );
+
+            var result = Tensor.Max( matrix, vector );
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // First row: max([1,5,3], [3,4,5])
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+            // Second row: max([2,4,6], [3,4,5])
+            Assert.That( result.Data[ 3 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 4 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 5 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            Assert.That( matrix.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // vector wins
+            Assert.That( matrix.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // matrix wins
+            Assert.That( matrix.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // vector wins
+            Assert.That( matrix.Grad[ 3 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // vector wins
+            Assert.That( matrix.Grad[ 4 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // tie - matrix wins (>=)
+            Assert.That( matrix.Grad[ 5 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // matrix wins
+
+            // Vector accumulates from both rows
+            Assert.That( vector.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) ); // wins in both rows
+            Assert.That( vector.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // loses in both rows
+            Assert.That( vector.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // wins in first row only
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Min_ScalarBroadcast_ComputesForwardAndBackward()
+        {
+            var tensor = new Tensor( new[] { 3 }, new[] { 1f, 5f, 3f } );
+            var scalar = new Tensor( 4f );
+
+            var result = Tensor.Min( tensor, scalar );
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            // Gradient flows to whichever is smaller
+            Assert.That( tensor.Grad[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // tensor wins
+            Assert.That( tensor.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // scalar wins
+            Assert.That( tensor.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // tensor wins
+
+            // Scalar accumulates from positions where it wins
+            Assert.That( scalar.Grad[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Min_1DBroadcastTo2D_ComputesForwardAndBackward()
+        {
+            // [2,3] min [3]
+            var matrix = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 4f, 6f } );
+            var vector = new Tensor( new[] { 3 }, new[] { 3f, 4f, 5f } );
+
+            var result = Tensor.Min( matrix, vector );
+
+            Assert.That( result.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // First row: min([1,5,3], [3,4,5])
+            Assert.That( result.Data[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 1 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            // Second row: min([2,4,6], [3,4,5])
+            Assert.That( result.Data[ 3 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 4 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( result.Data[ 5 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+
+            result.Backward();
+
+            Assert.That( matrix.Grad[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // matrix wins
+            Assert.That( matrix.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // vector wins
+            Assert.That( matrix.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // matrix wins (tie, <=)
+            Assert.That( matrix.Grad[ 3 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // matrix wins
+            Assert.That( matrix.Grad[ 4 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // matrix wins (tie, <=)
+            Assert.That( matrix.Grad[ 5 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // vector wins
+
+            // Vector accumulates from both rows
+            Assert.That( vector.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // loses in both rows
+            Assert.That( vector.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // wins in first row only
+            Assert.That( vector.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) ); // wins in second row only
         }
         //------------------------------------------------------------------
         [Test]

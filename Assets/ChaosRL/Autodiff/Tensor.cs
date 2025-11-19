@@ -66,25 +66,25 @@ namespace ChaosRL
         // Element-wise addition
         public static Tensor operator +( Tensor a, Tensor b )
         {
-            // Handle scalar broadcasting
-            if (a.IsScalar && !b.IsScalar)
-                a = a.Broadcast( b.Shape );
-            else if (b.IsScalar && !a.IsScalar)
-                b = b.Broadcast( a.Shape );
+            if (CanBroadcastModulo( a, b ) == false)
+                throw new ArgumentException(
+                    $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for addition" );
 
-            if (!ShapesMatch( a.Shape, b.Shape ))
-                throw new ArgumentException( "Shapes must match for addition" );
+            int sizeA = a.Size;
+            int sizeB = b.Size;
+            int resultSize = Math.Max( sizeA, sizeB );
+            var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( a.Shape, new[] { a, b }, "+" );
-            for (int i = 0; i < a.Size; i++)
-                result.Data[ i ] = a.Data[ i ] + b.Data[ i ];
+            var result = new Tensor( resultShape, new[] { a, b }, "+" );
+            for (int i = 0; i < resultSize; i++)
+                result.Data[ i ] = a.Data[ i % sizeA ] + b.Data[ i % sizeB ];
 
             result._backward = () =>
             {
-                for (int i = 0; i < a.Size; i++)
+                for (int i = 0; i < resultSize; i++)
                 {
-                    a.Grad[ i ] += result.Grad[ i ];
-                    b.Grad[ i ] += result.Grad[ i ];
+                    a.Grad[ i % sizeA ] += result.Grad[ i ];
+                    b.Grad[ i % sizeB ] += result.Grad[ i ];
                 }
             };
             return result;
@@ -93,25 +93,25 @@ namespace ChaosRL
         // Element-wise multiplication
         public static Tensor operator *( Tensor a, Tensor b )
         {
-            // Handle scalar broadcasting
-            if (a.IsScalar && !b.IsScalar)
-                a = a.Broadcast( b.Shape );
-            else if (b.IsScalar && !a.IsScalar)
-                b = b.Broadcast( a.Shape );
+            if (CanBroadcastModulo( a, b ) == false)
+                throw new ArgumentException(
+                    $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for multiplication" );
 
-            if (!ShapesMatch( a.Shape, b.Shape ))
-                throw new ArgumentException( "Shapes must match for multiplication" );
+            int sizeA = a.Size;
+            int sizeB = b.Size;
+            int resultSize = Math.Max( sizeA, sizeB );
+            var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( a.Shape, new[] { a, b }, "*" );
-            for (int i = 0; i < a.Size; i++)
-                result.Data[ i ] = a.Data[ i ] * b.Data[ i ];
+            var result = new Tensor( resultShape, new[] { a, b }, "*" );
+            for (int i = 0; i < resultSize; i++)
+                result.Data[ i ] = a.Data[ i % sizeA ] * b.Data[ i % sizeB ];
 
             result._backward = () =>
             {
-                for (int i = 0; i < a.Size; i++)
+                for (int i = 0; i < resultSize; i++)
                 {
-                    a.Grad[ i ] += b.Data[ i ] * result.Grad[ i ];
-                    b.Grad[ i ] += a.Data[ i ] * result.Grad[ i ];
+                    a.Grad[ i % sizeA ] += b.Data[ i % sizeB ] * result.Grad[ i ];
+                    b.Grad[ i % sizeB ] += a.Data[ i % sizeA ] * result.Grad[ i ];
                 }
             };
             return result;
@@ -129,25 +129,27 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public static Tensor operator /( Tensor a, Tensor b )
         {
-            // Handle scalar broadcasting
-            if (a.IsScalar && !b.IsScalar)
-                a = a.Broadcast( b.Shape );
-            else if (b.IsScalar && !a.IsScalar)
-                b = b.Broadcast( a.Shape );
+            if (CanBroadcastModulo( a, b ) == false)
+                throw new ArgumentException(
+                    $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for division" );
 
-            if (!ShapesMatch( a.Shape, b.Shape ))
-                throw new ArgumentException( "Shapes must match for division" );
+            int sizeA = a.Size;
+            int sizeB = b.Size;
+            int resultSize = Math.Max( sizeA, sizeB );
+            var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( a.Shape, new[] { a, b }, "/" );
-            for (int i = 0; i < a.Size; i++)
-                result.Data[ i ] = a.Data[ i ] / b.Data[ i ];
+            var result = new Tensor( resultShape, new[] { a, b }, "/" );
+            for (int i = 0; i < resultSize; i++)
+                result.Data[ i ] = a.Data[ i % sizeA ] / b.Data[ i % sizeB ];
 
             result._backward = () =>
             {
-                for (int i = 0; i < a.Size; i++)
+                for (int i = 0; i < resultSize; i++)
                 {
-                    a.Grad[ i ] += (1f / b.Data[ i ]) * result.Grad[ i ];
-                    b.Grad[ i ] += (-a.Data[ i ] / (b.Data[ i ] * b.Data[ i ])) * result.Grad[ i ];
+                    int idxA = i % sizeA;
+                    int idxB = i % sizeB;
+                    a.Grad[ idxA ] += (1f / b.Data[ idxB ]) * result.Grad[ i ];
+                    b.Grad[ idxB ] += (-a.Data[ idxA ] / (b.Data[ idxB ] * b.Data[ idxB ])) * result.Grad[ i ];
                 }
             };
             return result;
@@ -240,21 +242,29 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public static Tensor Max( Tensor a, Tensor b )
         {
-            if (!ShapesMatch( a.Shape, b.Shape ))
-                throw new ArgumentException( "Shapes must match for max" );
+            if (CanBroadcastModulo( a, b ) == false)
+                throw new ArgumentException(
+                    $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for max" );
 
-            var result = new Tensor( a.Shape, new[] { a, b }, "max" );
-            for (int i = 0; i < a.Size; i++)
-                result.Data[ i ] = Math.Max( a.Data[ i ], b.Data[ i ] );
+            int sizeA = a.Size;
+            int sizeB = b.Size;
+            int resultSize = Math.Max( sizeA, sizeB );
+            var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
+
+            var result = new Tensor( resultShape, new[] { a, b }, "max" );
+            for (int i = 0; i < resultSize; i++)
+                result.Data[ i ] = Math.Max( a.Data[ i % sizeA ], b.Data[ i % sizeB ] );
 
             result._backward = () =>
             {
-                for (int i = 0; i < a.Size; i++)
+                for (int i = 0; i < resultSize; i++)
                 {
-                    if (a.Data[ i ] >= b.Data[ i ])
-                        a.Grad[ i ] += result.Grad[ i ];
+                    int idxA = i % sizeA;
+                    int idxB = i % sizeB;
+                    if (a.Data[ idxA ] >= b.Data[ idxB ])
+                        a.Grad[ idxA ] += result.Grad[ i ];
                     else
-                        b.Grad[ i ] += result.Grad[ i ];
+                        b.Grad[ idxB ] += result.Grad[ i ];
                 }
             };
             return result;
@@ -262,21 +272,29 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public static Tensor Min( Tensor a, Tensor b )
         {
-            if (!ShapesMatch( a.Shape, b.Shape ))
-                throw new ArgumentException( "Shapes must match for min" );
+            if (CanBroadcastModulo( a, b ) == false)
+                throw new ArgumentException(
+                    $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for min" );
 
-            var result = new Tensor( a.Shape, new[] { a, b }, "min" );
-            for (int i = 0; i < a.Size; i++)
-                result.Data[ i ] = Math.Min( a.Data[ i ], b.Data[ i ] );
+            int sizeA = a.Size;
+            int sizeB = b.Size;
+            int resultSize = Math.Max( sizeA, sizeB );
+            var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
+
+            var result = new Tensor( resultShape, new[] { a, b }, "min" );
+            for (int i = 0; i < resultSize; i++)
+                result.Data[ i ] = Math.Min( a.Data[ i % sizeA ], b.Data[ i % sizeB ] );
 
             result._backward = () =>
             {
-                for (int i = 0; i < a.Size; i++)
+                for (int i = 0; i < resultSize; i++)
                 {
-                    if (a.Data[ i ] <= b.Data[ i ])
-                        a.Grad[ i ] += result.Grad[ i ];
+                    int idxA = i % sizeA;
+                    int idxB = i % sizeB;
+                    if (a.Data[ idxA ] <= b.Data[ idxB ])
+                        a.Grad[ idxA ] += result.Grad[ i ];
                     else
-                        b.Grad[ i ] += result.Grad[ i ];
+                        b.Grad[ idxB ] += result.Grad[ i ];
                 }
             };
             return result;
@@ -624,17 +642,45 @@ namespace ChaosRL
             return true;
         }
         //------------------------------------------------------------------
-        private Tensor Broadcast( int[] targetShape )
+        private static bool CanBroadcastModulo( Tensor a, Tensor b )
         {
-            if (!IsScalar)
-                return this;
+            int sizeA = a.Size;
+            int sizeB = b.Size;
 
-            var broadcasted = new Tensor( targetShape, Children.ToArray() );
-            var scalarValue = Data[ 0 ];
-            for (int i = 0; i < broadcasted.Size; i++)
-                broadcasted.Data[ i ] = scalarValue;
+            // 1) Both scalars or equal sizes always OK
+            if (sizeA == sizeB)
+                return true;
 
-            return broadcasted;
+            // 2) One is scalar
+            if (sizeA == 1 || sizeB == 1)
+                return true;
+
+            // 3) Larger must be clean multiple of smaller
+            int bigger = Math.Max( sizeA, sizeB );
+            int smaller = Math.Min( sizeA, sizeB );
+
+            if (bigger % smaller != 0)
+                return false;
+
+            // 4) Enforce that one is 1D or classic bias pattern
+            //    This stops invalid multi-dimensional flattening patterns.
+            if (a.Shape.Length > 1 && b.Shape.Length > 1)
+            {
+                // Only allow classic bias: [M,N] + [N]
+                // Check if one shape is suffix of the other
+                int[] shorter = a.Shape.Length < b.Shape.Length ? a.Shape : b.Shape;
+                int[] longer = a.Shape.Length < b.Shape.Length ? b.Shape : a.Shape;
+
+                // Check if shorter matches end of longer
+                int offset = longer.Length - shorter.Length;
+                for (int i = 0; i < shorter.Length; i++)
+                {
+                    if (shorter[ i ] != longer[ offset + i ])
+                        return false;
+                }
+            }
+
+            return true;
         }
         //------------------------------------------------------------------
         /// <summary>
