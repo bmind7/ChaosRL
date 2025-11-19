@@ -823,5 +823,170 @@ namespace ChaosRL.Tests
             Assert.That( b.Grad[ 3 ], Is.EqualTo( 1f ).Within( 1e-6 ) );    // 4/4
         }
         //------------------------------------------------------------------
+        [Test]
+        public void Max_AllDimensions_FindsMaximum()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 8f, 4f } );
+            var max = a.Max();
+
+            Assert.That( max.Shape, Is.EqualTo( new[] { 1 } ) );
+            Assert.That( max.Data[ 0 ], Is.EqualTo( 8f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_AllDimensions_BackwardToMaxElement()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 8f, 4f } );
+            var max = a.Max();
+
+            max.Backward();
+
+            // Gradient should only flow to the max element (index 4, value 8)
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 4 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 5 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_AlongDimension0_ComputesCorrectly()
+        {
+            // Shape [2, 3]: [[1, 5, 3], [2, 4, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 4f, 6f } );
+            var max = a.Max( 0 ); // Max along rows
+
+            // Result shape should be [3]
+            Assert.That( max.Shape, Is.EqualTo( new[] { 3 } ) );
+            Assert.That( max.Data[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );  // max(1, 2)
+            Assert.That( max.Data[ 1 ], Is.EqualTo( 5f ).Within( 1e-6 ) );  // max(5, 4)
+            Assert.That( max.Data[ 2 ], Is.EqualTo( 6f ).Within( 1e-6 ) );  // max(3, 6)
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_AlongDimension1_ComputesCorrectly()
+        {
+            // Shape [2, 3]: [[1, 5, 3], [2, 4, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 4f, 6f } );
+            var max = a.Max( 1 ); // Max along columns
+
+            // Result shape should be [2]
+            Assert.That( max.Shape, Is.EqualTo( new[] { 2 } ) );
+            Assert.That( max.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) );  // max(1, 5, 3)
+            Assert.That( max.Data[ 1 ], Is.EqualTo( 6f ).Within( 1e-6 ) );  // max(2, 4, 6)
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_AlongDimension_BackwardToMaxElements()
+        {
+            // Shape [2, 3]: [[1, 5, 3], [2, 4, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 5f, 3f, 2f, 4f, 6f } );
+            var max = a.Max( 1 ); // Max along columns -> shape [2], values [5, 6]
+
+            max.Backward();
+
+            // Gradient should only flow to max elements in each row
+            // Row 0: max is 5 (index 1)
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            // Row 1: max is 6 (index 5)
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 4 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 5 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_3DTensor_AlongMiddleDimension()
+        {
+            // Shape [2, 3, 2]: 2 matrices of 3×2
+            var a = new Tensor( new[] { 2, 3, 2 } );
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i + 1;
+
+            var max = a.Max( 1 ); // Max along dimension 1
+
+            // Result shape should be [2, 2]
+            Assert.That( max.Shape, Is.EqualTo( new[] { 2, 2 } ) );
+            Assert.That( max.Size, Is.EqualTo( 4 ) );
+
+            // First matrix (indices 0-5): [[1,2], [3,4], [5,6]]
+            // Max along rows: [5, 6]
+            Assert.That( max.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+            Assert.That( max.Data[ 1 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+
+            // Second matrix (indices 6-11): [[7,8], [9,10], [11,12]]
+            // Max along rows: [11, 12]
+            Assert.That( max.Data[ 2 ], Is.EqualTo( 11f ).Within( 1e-6 ) );
+            Assert.That( max.Data[ 3 ], Is.EqualTo( 12f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_NegativeDimension_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = i + 1;
+
+            // dim=-1 should be equivalent to dim=2
+            var max = a.Max( -1 );
+
+            Assert.That( max.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( max.Size, Is.EqualTo( 6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_InvalidDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => a.Max( -3 ) );
+            Assert.Throws<ArgumentException>( () => a.Max( 2 ) );
+            Assert.Throws<ArgumentException>( () => a.Max( 5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_WithDuplicateMaxValues_GradientToFirstOccurrence()
+        {
+            // Test tie-breaking behavior
+            var a = new Tensor( new[] { 4 }, new[] { 3f, 5f, 5f, 2f } );
+            var max = a.Max();
+
+            Assert.That( max.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+
+            max.Backward();
+
+            // Gradient should go to first occurrence of max value (index 1)
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Max_ChainedWithOperations_ComputesGradientsCorrectly()
+        {
+            var a = new Tensor( new[] { 3 }, new[] { 1f, 4f, 2f } );
+            var b = new Tensor( new[] { 3 }, new[] { 2f, 2f, 2f } );
+
+            var c = a * b; // [2, 8, 4]
+            var max = c.Max();
+
+            Assert.That( max.Data[ 0 ], Is.EqualTo( 8f ).Within( 1e-6 ) );
+
+            max.Backward();
+
+            // dc/da = b, dmax/dc flows only to index 1, so da[1] = b[1] = 2
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+
+            // dc/db = a, dmax/dc flows only to index 1, so db[1] = a[1] = 4
+            Assert.That( b.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( b.Grad[ 1 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( b.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
     }
 }

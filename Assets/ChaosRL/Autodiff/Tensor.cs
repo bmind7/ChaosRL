@@ -477,6 +477,111 @@ namespace ChaosRL
             return sum / (float)dimSize;
         }
         //------------------------------------------------------------------
+        /// <summary>
+        /// Maximum value across all elements to a scalar tensor.
+        /// </summary>
+        public Tensor Max()
+        {
+            var result = new Tensor( new[] { 1 }, new[] { this }, "max" );
+
+            float maxVal = float.MinValue;
+            int maxIdx = 0;
+            for (int i = 0; i < Size; i++)
+            {
+                if (Data[ i ] > maxVal)
+                {
+                    maxVal = Data[ i ];
+                    maxIdx = i;
+                }
+            }
+            result.Data[ 0 ] = maxVal;
+
+            result._backward = () =>
+            {
+                // Gradient only flows to the max element
+                Grad[ maxIdx ] += result.Grad[ 0 ];
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Maximum values along a specific dimension.
+        /// For example, if shape is [2, 3, 4] and dim=1, result shape is [2, 4].
+        /// </summary>
+        public Tensor Max( int dim )
+        {
+            int rank = Shape.Length;
+
+            // Support negative dims
+            if (dim < 0) dim += rank;
+            if (dim < 0 || dim >= rank)
+                throw new ArgumentException(
+                    $"Dimension {dim} out of range for shape with {rank} dimensions" );
+
+            // Build output shape by dropping the reduced dim
+            var outShape = new int[ rank - 1 ];
+            for (int i = 0, j = 0; i < rank; i++)
+                if (i != dim)
+                    outShape[ j++ ] = Shape[ i ];
+
+            // Edge case: full reduction -> scalar
+            if (outShape.Length == 0)
+                return Max();
+
+            var result = new Tensor( outShape, new[] { this }, $"max(dim={dim})" );
+
+            // Calculate strides
+            int dimSize = Shape[ dim ];
+            int innerSize = 1;
+            for (int i = dim + 1; i < rank; i++)
+                innerSize *= Shape[ i ];
+
+            int blockSize = dimSize * innerSize;
+            int outerSize = Size / blockSize;
+
+            // Store indices of max elements for backward pass
+            var maxIndices = new int[ result.Size ];
+
+            // Forward: find max along dimension
+            for (int outer = 0; outer < outerSize; outer++)
+            {
+                int baseBlock = outer * blockSize;
+
+                for (int inner = 0; inner < innerSize; inner++)
+                {
+                    int baseIdx = baseBlock + inner;
+                    float maxVal = float.MinValue;
+                    int maxLocalIdx = 0;
+
+                    for (int d = 0; d < dimSize; d++)
+                    {
+                        int idx = baseIdx + d * innerSize;
+                        if (Data[ idx ] > maxVal)
+                        {
+                            maxVal = Data[ idx ];
+                            maxLocalIdx = d;
+                        }
+                    }
+
+                    int outIdx = outer * innerSize + inner;
+                    result.Data[ outIdx ] = maxVal;
+                    maxIndices[ outIdx ] = baseIdx + maxLocalIdx * innerSize;
+                }
+            }
+
+            // Backward: gradient only flows to max elements
+            result._backward = () =>
+            {
+                for (int i = 0; i < result.Size; i++)
+                {
+                    Grad[ maxIndices[ i ] ] += result.Grad[ i ];
+                }
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
         public void Backward()
         {
             var topo = new List<Tensor>();
