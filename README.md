@@ -30,13 +30,21 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 
 ---
 
-### 🧠 Future plans
-- Tensor backend with **vectorized ops (CPU)**
+### 🧠 Roadmap
+- ~~Tensor calss with better data layout~~
+- Backend with **vectorized ops (CPU)**
 - **Multithreading** support for simulation and training
 - **Compute shader** backend (GPU)
 - Core plumbing: Agents, Academy, Save/Load, Configs, Telemetry
 
 ---
 
+### ❓Current issues 
+- Broadcasting is very limited for now and supports only shape mismatch. For example, **Add** two tensors (2, 5, 10) and (5,10) will work, because the tail of the shape is identical. Operations on scalars tensors also will work becuase scalar has shape (1) which can match anything.
+- Because of limited broadcasting **Normalize()** method will work only on whole tensor, dim=0 or dim=last_dimention 
+
+
+---
+
 ### 💡 Notes
-This isn’t meant to be fast or production-ready yet — it’s a learning playground to understand how PPO and autodiff actually work under the hood.
+This is not a production ready code. It’s a learning playground to understand how PPO and autodiff actually work under the hood. 
