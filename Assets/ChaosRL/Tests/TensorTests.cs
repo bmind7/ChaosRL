@@ -1655,6 +1655,201 @@ namespace ChaosRL.Tests
         }
         //------------------------------------------------------------------
         [Test]
+        public void Reshape_2Dto1D_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 6 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 6 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+            Assert.That( b.Data, Is.EqualTo( new[] { 1f, 2f, 3f, 4f, 5f, 6f } ) );
+
+            // Verify data is shared
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_1Dto2D_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 6 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 2, 3 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Verify data is shared
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_3DtoOther3D_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3, 4 }, Enumerable.Range( 0, 24 ).Select( x => (float)x ).ToArray() );
+            var b = a.Reshape( 4, 6 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 4, 6 } ) );
+            Assert.That( b.Size, Is.EqualTo( 24 ) );
+
+            // Verify data is shared
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_ToSameShape_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 2, 3 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Still should be a view sharing data
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_Example10x5x20To10x100_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 10, 5, 20 } ); // Total size: 1000
+            var b = a.Reshape( 10, 100 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 10, 100 } ) );
+            Assert.That( b.Size, Is.EqualTo( 1000 ) );
+
+            // Verify data is shared
+            Assert.AreSame( a.Data, b.Data );
+            Assert.AreSame( a.Grad, b.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_InvalidSize_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } ); // Size: 6
+
+            Assert.Throws<ArgumentException>( () => a.Reshape( 5 ) );
+            Assert.Throws<ArgumentException>( () => a.Reshape( 2, 4 ) );
+            Assert.Throws<ArgumentException>( () => a.Reshape( 3, 3 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_EmptyShape_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => a.Reshape() );
+            Assert.Throws<ArgumentException>( () => a.Reshape( new int[] { } ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_NegativeDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => a.Reshape( -1, 6 ) );
+            Assert.Throws<ArgumentException>( () => a.Reshape( 2, -3 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_ZeroDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => a.Reshape( 0, 6 ) );
+            Assert.Throws<ArgumentException>( () => a.Reshape( 2, 0 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 6 );      // [6]
+            var c = b * 2f;              // [6]
+            var d = c.Sum();             // scalar
+
+            d.Backward();
+
+            // Gradients should be 2 (from multiplication) for all elements
+            for (int i = 0; i < 6; i++)
+            {
+                Assert.That( a.Grad[ i ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_MultipleReshapes_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 6 );      // [6]
+            var c = b.Reshape( 3, 2 );   // [3, 2]
+            var d = c * 3f;              // [3, 2]
+            var e = d.Sum();             // scalar
+
+            e.Backward();
+
+            // Gradients should be 3 (from multiplication) for all elements
+            for (int i = 0; i < 6; i++)
+            {
+                Assert.That( a.Grad[ i ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            }
+
+            // All tensors should share the same grad array
+            Assert.AreSame( a.Grad, b.Grad );
+            Assert.AreSame( b.Grad, c.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_WithOtherOperations_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 3, 2 );   // [3, 2]
+            var c = new Tensor( new[] { 3, 2 }, new[] { 1f, 1f, 1f, 1f, 1f, 1f } );
+            var d = b + c;               // [3, 2]
+            var e = d.Sum();             // scalar
+
+            e.Backward();
+
+            // Gradients should be 1 for all elements
+            for (int i = 0; i < 6; i++)
+            {
+                Assert.That( a.Grad[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+                Assert.That( c.Grad[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_DataModificationAffectsOriginal()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 6 );
+
+            // Modify reshaped tensor
+            b.Data[ 0 ] = 99f;
+
+            // Original should be affected
+            Assert.That( a.Data[ 0 ], Is.EqualTo( 99f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Reshape_ChainedWithUnsqueezeAndSqueeze_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.Reshape( 6 );      // [6]
+            var c = b.Unsqueeze( 0 );    // [1, 6]
+            var d = c.Squeeze( 0 );      // [6]
+            var e = d.Reshape( 3, 2 );   // [3, 2]
+
+            Assert.That( e.Shape, Is.EqualTo( new[] { 3, 2 } ) );
+
+            // All should share same data
+            Assert.AreSame( a.Data, e.Data );
+            Assert.AreSame( a.Grad, e.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
         public void RequiresGrad_DefaultTrue_EnablesGradientTracking()
         {
             var a = new Tensor( new[] { 2 }, new[] { 2f, 3f } );

@@ -965,6 +965,46 @@ namespace ChaosRL
             }
         }
         //------------------------------------------------------------------
+        /// <summary>
+        /// Reshapes the tensor to a new shape while keeping the same data.
+        /// This is a view operation - shares the same Data and Grad arrays.
+        /// </summary>
+        /// <param name="newShape">New shape dimensions. Total size must match current size.</param>
+        /// <returns>New tensor view with reshaped data</returns>
+        public Tensor Reshape( params int[] newShape )
+        {
+            if (newShape == null || newShape.Length == 0)
+                throw new ArgumentException( "New shape cannot be null or empty" );
+
+            // Calculate total size of new shape
+            int newSize = 1;
+            foreach (int dim in newShape)
+            {
+                if (dim <= 0)
+                    throw new ArgumentException( $"All dimensions must be positive, got {dim}" );
+                newSize *= dim;
+            }
+
+            // Verify total size matches
+            if (newSize != Size)
+                throw new ArgumentException(
+                    $"Total size must remain the same. Current size: {Size}, new size: {newSize}" );
+
+            // Create view tensor sharing data/grad
+            var result = new Tensor( newShape, new[] { this }, $"reshape({string.Join( ",", newShape )})" );
+            result.Data = this.Data; // Share data array
+            result.Grad = this.Grad; // Share grad array
+            result.RequiresGrad = this.RequiresGrad;
+
+            // Backward pass: gradients already shared
+            result._backward = () =>
+            {
+                // Gradients already shared, nothing to do
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
         private int ToFlatIndex( int[] indices )
         {
             if (indices == null || indices.Length != Shape.Length)
