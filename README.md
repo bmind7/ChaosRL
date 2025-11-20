@@ -11,10 +11,9 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 
 ### ✨ What’s inside
 - Simple **continuous control task** – tilt a panel to keep a ball centered  
-- **Autodiff engine** (scalar-based, dynamic graph)  
+- **Autodiff engine** (scalar-based, tensor-based, dynamic graph)  
 - **PPO** implementation with entropy bonus, value function, clipping, etc.  
 - All code runs in **Unity / C#**, single-threaded  
-- Focused on clarity rather than performance
 
 ---
 
@@ -30,8 +29,15 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 
 ---
 
+### 💻 Code to look at
+- **Value.cs** simple implementaion of AutoDiff, easy to understand 
+- **Tensor.cs** data oriented implementation of AutoDiff
+- **Academy.cs** PPO implementation
+
+---
+
 ### 🧠 Roadmap
-- ~~Tensor calss with better data layout~~
+- ~~Tensor calss with better data layout~~ (**200x-400x** speed up of MatMul)
 - Backend with **vectorized ops (CPU)**
 - **Multithreading** support for simulation and training
 - **Compute shader** backend (GPU)
@@ -40,9 +46,10 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 ---
 
 ### ❓Current issues 
+- Performance on CPU is still way behind libs like PyTorch
 - Broadcasting is very limited for now and supports only shape mismatch. For example, **Add** two tensors (2, 5, 10) and (5,10) will work, because the tail of the shape is identical. Operations on scalars tensors also will work becuase scalar has shape (1) which can match anything.
 - Because of limited broadcasting **Normalize()** method will work only on whole tensor, dim=0 or dim=last_dimention 
-
+- **ExpandLast** works only for last dim. I need to add general **Expand** then **Normalize** in any dimention will be easy
 
 ---
 

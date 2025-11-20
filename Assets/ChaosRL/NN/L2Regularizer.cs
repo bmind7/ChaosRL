@@ -3,16 +3,20 @@ using System.Collections.Generic;
 
 namespace ChaosRL
 {
+    /// <summary>
+    /// L2 (weight decay) regularizer for Tensor-based neural networks.
+    /// Computes the sum of squared parameters scaled by a coefficient.
+    /// </summary>
     public class L2Regularizer
     {
         //------------------------------------------------------------------
-        private readonly Value[] _parameters;
+        private readonly Tensor[] _parameters;
         //------------------------------------------------------------------
-        public L2Regularizer( IEnumerable<IEnumerable<Value>> parameterGroups )
+        public L2Regularizer( IEnumerable<IEnumerable<Tensor>> parameterGroups )
         {
             if (parameterGroups == null) throw new ArgumentNullException( nameof( parameterGroups ) );
 
-            var collected = new List<Value>();
+            var collected = new List<Tensor>();
             foreach (var group in parameterGroups)
                 foreach (var parameter in group)
                     if (parameter != null)
@@ -24,14 +28,17 @@ namespace ChaosRL
             _parameters = collected.ToArray();
         }
         //------------------------------------------------------------------
-        public Value Compute( float coefficient, float scale = 0.5f )
+        public Tensor Compute( float coefficient, float scale = 0.5f )
         {
             if (coefficient <= 0f)
-                return 0f;
+                return new Tensor( 0f );
 
-            Value total = 0f;
+            Tensor total = new Tensor( 0f );
             for (int i = 0; i < _parameters.Length; i++)
-                total += _parameters[ i ] * _parameters[ i ];
+            {
+                var squared = _parameters[ i ] * _parameters[ i ];
+                total += squared.Sum();
+            }
 
             return total * (scale * coefficient);
         }

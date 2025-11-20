@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.2.0] - 2025-11-20
 
 ### Added
+- Improved performnace for regular ops **40x-100x** for MatMul **200x-400x**
 - **Data-oriented Tensor class** with vectorized operations (no SIMD yet)
 - **Broadcasting support** for tensor operations (limited to tail shape matching)
 - **Tensor-based neural network** modules and optimizer

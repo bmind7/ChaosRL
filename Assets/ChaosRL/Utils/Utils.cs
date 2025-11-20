@@ -7,69 +7,59 @@ namespace ChaosRL
     public static class Utils
     {
         //------------------------------------------------------------------
-        // In-place z-score normalization: x' = (x - μ) / σ
-        public static Span<float> Normalize( Span<float> data )
+        /// <summary>
+        /// Extracts a minibatch from a source tensor based on shuffled indices.
+        /// Supports 1D and 2D tensors.
+        /// </summary>
+        /// <param name="source">Source tensor to extract from</param>
+        /// <param name="indices">Shuffled indices array</param>
+        /// <param name="start">Starting position in indices array</param>
+        /// <param name="batchSize">Desired batch size</param>
+        /// <returns>New tensor containing the minibatch</returns>
+        public static Tensor GetMinibatch( Tensor source, int[] indices, int start, int batchSize )
         {
-            float mean = 0f;
-            // Two-pass approach maintains numerical stability for the variance estimate
-            for (int i = 0; i < data.Length; i++)
-            {
-                mean += data[ i ];
-            }
-            mean /= data.Length;
+            int end = Math.Min( start + batchSize, indices.Length );
+            int mbSize = end - start;
 
-            float variance = 0f;
-            for (int i = 0; i < data.Length; i++)
+            // Determine result shape based on source dimensions
+            int[] resultShape;
+            if (source.Shape.Length == 2)
             {
-                float diff = data[ i ] - mean;
-                variance += diff * diff;
+                // [N, features] -> [mbSize, features]
+                resultShape = new int[] { mbSize, source.Shape[ 1 ] };
             }
-            variance /= data.Length;
-            // Epsilon prevents division by zero when all entries match the mean
-            float std = Mathf.Sqrt( variance + 1e-8f );
-
-            for (int i = 0; i < data.Length; i++)
+            else if (source.Shape.Length == 1)
             {
-                data[ i ] = (data[ i ] - mean) / std;
+                // [N] -> [mbSize]
+                resultShape = new int[] { mbSize };
+            }
+            else
+            {
+                throw new ArgumentException( $"GetMinibatch only supports 1D or 2D tensors, got {source.Shape.Length}D" );
             }
 
-            return data;
-        }
-        //------------------------------------------------------------------
-        public static Value Mean( ReadOnlySpan<Value> values )
-        {
-            if (values.Length == 0)
-                throw new ArgumentException( "Mean requires at least one element", nameof( values ) );
+            var result = new Tensor( resultShape, requiresGrad: false );
 
-            Value sum = 0f;
-            for (int i = 0; i < values.Length; i++)
+            if (source.Shape.Length == 2)
             {
-                sum += values[ i ];
+                int features = source.Shape[ 1 ];
+                for (int i = 0; i < mbSize; i++)
+                {
+                    int srcIdx = indices[ start + i ];
+                    for (int j = 0; j < features; j++)
+                        result[ i, j ] = source[ srcIdx, j ];
+                }
+            }
+            else // 1D
+            {
+                for (int i = 0; i < mbSize; i++)
+                {
+                    int srcIdx = indices[ start + i ];
+                    result[ i ] = source[ srcIdx ];
+                }
             }
 
-            return sum / values.Length;
-        }
-        //------------------------------------------------------------------
-        // Calculate mean return per environment based on how many done flags were set
-        public static float MeanReturn( ReadOnlySpan<float> returns, ReadOnlySpan<float> doneFlags, int numEnvs )
-        {
-            if (returns.Length != doneFlags.Length)
-                throw new ArgumentException( "returns and doneFlags must have equal length" );
-
-            float totalReturn = 0f;
-            int episodeEnds = 0;
-
-            for (int i = 0; i < returns.Length; i++)
-            {
-                totalReturn += returns[ i ];
-                if (doneFlags[ i ] > 0.5f)
-                    episodeEnds++;
-            }
-
-            if (episodeEnds == 0)
-                episodeEnds = 1;
-
-            return (totalReturn / episodeEnds) / numEnvs;
+            return result;
         }
         //------------------------------------------------------------------
     }

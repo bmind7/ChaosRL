@@ -3,56 +3,100 @@ using System;
 namespace ChaosRL
 {
     /// <summary>
-    /// Normal (Gaussian) distribution utility that operates on Value for autodiff.
+    /// Normal (Gaussian) distribution utility that operates on Tensor for autodiff.
+    /// Supports batch operations where mean and std can be tensors of any compatible shape.
     /// </summary>
     public class Dist
     {
         //------------------------------------------------------------------
-        public Value Mean { get; }
-        public Value StdDev { get; }
+        public Tensor Mean { get; }
+        public Tensor StdDev { get; }
         //------------------------------------------------------------------
         public static Dist StandardNormal() => new Dist( 0f, 1f );
         //------------------------------------------------------------------
-        public Dist( Value mean, Value std )
+        public Dist( Tensor mean, Tensor std )
         {
             // Note: StdDev should be > 0. Consider parameterizing via a positive transform if needed.
+            if (!ShapesMatch( mean.Shape, std.Shape ))
+                throw new ArgumentException( "Mean and StdDev must have matching shapes" );
+
             Mean = mean;
             StdDev = std;
         }
         //------------------------------------------------------------------
-        // Sample using Box–Muller with RandomHub for thread safety; returns a Value enabling gradients w.r.t. Mean/StdDev.
-        public Value Sample()
+        /// <summary>
+        /// Sample using reparameterization trick: x = mean + std * z, where z ~ N(0,1).
+        /// Returns a Tensor enabling gradients w.r.t. Mean/StdDev.
+        /// </summary>
+        public Tensor Sample()
         {
-            double u1 = 1.0 - RandomHub.NextDouble(); // avoid 0
-            double u2 = 1.0 - RandomHub.NextDouble();
-            float z = (float)(Math.Sqrt( -2.0 * Math.Log( u1 ) ) * Math.Cos( 2.0 * Math.PI * u2 ));
-            return Mean + StdDev * z; // reparameterization: x = mean + std * z
+            var z = new float[ Mean.Size ];
+            for (int i = 0; i < z.Length; i++)
+            {
+                double u1 = 1.0 - RandomHub.NextDouble(); // avoid 0
+                double u2 = 1.0 - RandomHub.NextDouble();
+                z[ i ] = (float)(Math.Sqrt( -2.0 * Math.Log( u1 ) ) * Math.Cos( 2.0 * Math.PI * u2 ));
+            }
+
+            var zTensor = new Tensor( Mean.Shape, z );
+            return Mean + StdDev * zTensor; // reparameterization: x = mean + std * z
         }
         //------------------------------------------------------------------
-        // Probability density as a Value
-        public Value Pdf( Value x )
+        /// <summary>
+        /// Probability density as a Tensor: (1/(sqrt(2π)σ)) * exp(-0.5*z^2)
+        /// where z = (x - μ) / σ
+        /// </summary>
+        public Tensor Pdf( Tensor x )
         {
-            Value z = (x - Mean) / StdDev;
+            if (!ShapesMatch( x.Shape, Mean.Shape ))
+                throw new ArgumentException( "Input x must have same shape as Mean" );
+
+            var z = (x - Mean) / StdDev;
             float sqrt2pi = (float)Math.Sqrt( 2.0 * Math.PI );
-            Value coeff = (1.0f / sqrt2pi) / StdDev;
-            Value expTerm = (-0.5f * z * z).Exp();
+            var coeff = (1.0f / sqrt2pi) / StdDev;
+            var expTerm = (-0.5f * z * z).Exp();
             return coeff * expTerm;
         }
         //------------------------------------------------------------------
-        // Log probability as a Value: -0.5*z^2 - log(std) - 0.5*log(2*pi)
-        public Value LogProb( Value x )
+        /// <summary>
+        /// Log probability as a Tensor: -0.5*z^2 - log(std) - 0.5*log(2*pi)
+        /// where z = (x - mean) / std
+        /// </summary>
+        public Tensor LogProb( Tensor x )
         {
-            Value z = (x - Mean) / StdDev;
+            if (!ShapesMatch( x.Shape, Mean.Shape ))
+                throw new ArgumentException( "Input x must have same shape as Mean" );
+
+            var z = (x - Mean) / StdDev;
             float halfLog2Pi = 0.5f * (float)Math.Log( 2.0 * Math.PI );
-            return -0.5f * z * z - StdDev.Log() - halfLog2Pi;
+
+            var logStd = StdDev.Log();
+            var result = -0.5f * z * z - logStd - halfLog2Pi;
+
+            return result;
         }
         //------------------------------------------------------------------
-        // Analytical entropy of Normal(mean, std): 0.5 * (1 + log(2*pi*std^2))
-        public Value Entropy()
+        /// <summary>
+        /// Analytical entropy of Normal(mean, std): 0.5 * (1 + log(2*pi*std^2))
+        /// </summary>
+        public Tensor Entropy()
         {
             float twoPi = (float)(2.0 * Math.PI);
-            Value inside = twoPi * StdDev * StdDev; // 2*pi*std^2
+            var variance = StdDev * StdDev;
+            var inside = variance * twoPi; // 2*pi*std^2
             return 0.5f * (1.0f + inside.Log());
+        }
+        //------------------------------------------------------------------
+        private static bool ShapesMatch( int[] shape1, int[] shape2 )
+        {
+            if (shape1.Length != shape2.Length)
+                return false;
+
+            for (int i = 0; i < shape1.Length; i++)
+                if (shape1[ i ] != shape2[ i ])
+                    return false;
+
+            return true;
         }
         //------------------------------------------------------------------
     }

@@ -149,7 +149,7 @@ public class ChaosAgent : MonoBehaviour
             // Only query the policy every few physics ticks to reduce decision overhead and smooth control
             CheckAndMaybeEndEpisode();
             float[] obs = CollectObservations();
-            float[] actions = AcademyTensor.Instance.RequestDecision( _agentIdx, obs, _isEpisodeEnded, _accumulatedReward );
+            float[] actions = Academy.Instance.RequestDecision( _agentIdx, obs, _isEpisodeEnded, _accumulatedReward );
             ApplyActions( actions );
 
             if (_isEpisodeEnded)

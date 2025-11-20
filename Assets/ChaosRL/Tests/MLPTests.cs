@@ -4,14 +4,14 @@ using UnityEngine;
 
 namespace ChaosRL.Tests
 {
-    public class MLPTensorTests
+    public class MLPTests
     {
         //------------------------------------------------------------------
         [Test]
         public void MLPTensor_SimpleClassification_LearnsMapping()
         {
             // Create a simple neural network: 4 inputs -> 4 hidden -> 1 output
-            var mlp = new MLPTensor( numInputs: 4, layerSizes: new[] { 4, 1 }, lastLayerNonLin: false );
+            var mlp = new MLP( numInputs: 4, layerSizes: new[] { 4, 1 }, lastLayerNonLin: false );
 
             // Create training data: batch size of 2
             // Sample 1: [1, 2, 3, 4] -> 1
@@ -31,10 +31,10 @@ namespace ChaosRL.Tests
             var targets = new Tensor( new[] { 2, 1 }, targetData, "targets" );
 
             // Create optimizer
-            var optimizer = new AdamOptimizerTensor( new[] { mlp.Parameters }, beta1: 0.9f, beta2: 0.999f );
+            var optimizer = new AdamOptimizer( new[] { mlp.Parameters }, beta1: 0.9f, beta2: 0.999f );
 
             // Training parameters
-            const int epochs = 200;
+            const int epochs = 1000;
             const float learningRate = 0.003f;
             float finalLoss = 0f;
 
