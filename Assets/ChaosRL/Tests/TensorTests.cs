@@ -1,6 +1,8 @@
 using System;
 using NUnit.Framework;
 using ChaosRL;
+using System.Linq;
+using System.Diagnostics;
 
 namespace ChaosRL.Tests
 {
@@ -1650,6 +1652,112 @@ namespace ChaosRL.Tests
             // All should share same data
             Assert.AreSame( a.Data, d.Data );
             Assert.AreSame( a.Grad, d.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void RequiresGrad_DefaultTrue_EnablesGradientTracking()
+        {
+            var a = new Tensor( new[] { 2 }, new[] { 2f, 3f } );
+            var b = new Tensor( new[] { 2 }, new[] { 4f, 5f } );
+
+            Assert.That( a.RequiresGrad, Is.True );
+            Assert.That( b.RequiresGrad, Is.True );
+
+            var c = a * b;
+            Assert.That( c.RequiresGrad, Is.True );
+
+            c.Backward();
+
+            // Both should have gradients
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( b.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void RequiresGrad_SetToFalse_DisablesGradientTracking()
+        {
+            var a = new Tensor( new[] { 2 }, new[] { 2f, 3f } );
+            a.RequiresGrad = false;
+
+            var b = new Tensor( new[] { 2 }, new[] { 4f, 5f } );
+
+            var c = a * b;
+            Assert.That( c.RequiresGrad, Is.True ); // Still true because b requires grad
+
+            c.Backward();
+
+            // a should not have gradients accumulated
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+
+            // b should have gradients
+            Assert.That( b.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( b.Grad[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void RequiresGrad_BothFalse_NoBackwardFunction()
+        {
+            var a = new Tensor( new[] { 2 }, new[] { 2f, 3f } );
+            a.RequiresGrad = false;
+
+            var b = new Tensor( new[] { 2 }, new[] { 4f, 5f } );
+            b.RequiresGrad = false;
+
+            var c = a * b;
+            Assert.That( c.RequiresGrad, Is.False );
+
+            // Should not throw, but no gradients should accumulate
+            c.Backward();
+
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ) );
+            Assert.That( b.Grad[ 0 ], Is.EqualTo( 0f ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void RequiresGrad_Inference_NoMemoryOverhead()
+        {
+            // Simulate inference mode
+            var weights = new Tensor( new[] { 3, 2 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            weights.RequiresGrad = false;
+
+            var input = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            input.RequiresGrad = false;
+
+            var output = input.MatMul( weights );
+
+            Assert.That( output.RequiresGrad, Is.False );
+
+            // Forward pass works normally
+            Assert.That( output.Data[ 0 ], Is.EqualTo( 22f ).Within( 1e-6 ) );
+
+            // No backward function should be set (saving memory)
+            output.Backward();
+
+            // No gradients accumulated
+            Assert.That( input.Grad.Sum( x => x ), Is.EqualTo( 0f ) );
+            Assert.That( weights.Grad.Sum( x => x ), Is.EqualTo( 0f ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void RequiresGrad_MixedOperations_PropagatesCorrectly()
+        {
+            var a = new Tensor( 0.1f );
+            var b = new Tensor( 0.2f, requiresGrad: false );
+
+            var c = a + b;  // RequiresGrad = true (from a)
+            var d = c * 2f; // RequiresGrad = true
+            var e = d.Tanh(); // RequiresGrad = true
+
+            Assert.That( c.RequiresGrad, Is.True );
+            Assert.That( d.RequiresGrad, Is.True );
+            Assert.That( e.RequiresGrad, Is.True );
+
+            e.Backward();
+
+            // a should have gradient, b should not
+            Assert.That( a.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+            Assert.That( b.Grad[ 0 ], Is.EqualTo( 0f ) );
         }
         //------------------------------------------------------------------
     }

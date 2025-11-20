@@ -19,10 +19,11 @@ namespace ChaosRL
         public string Name { get; set; }
         public HashSet<Tensor> Children { get; private set; }
         public bool IsScalar => Size == 1;
+        public bool RequiresGrad { get; set; }
 
         private Action _backward;
         //------------------------------------------------------------------
-        public Tensor( int[] shape, float[] data = null, string name = "" )
+        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
         {
             if (shape == null || shape.Length == 0)
                 throw new ArgumentException( "Shape must have at least one dimension", nameof( shape ) );
@@ -40,6 +41,7 @@ namespace ChaosRL
             Grad = new float[ Size ];
             Name = name;
             Children = new HashSet<Tensor>();
+            RequiresGrad = requiresGrad;
             _backward = null;
 
             if (data != null && data.Length != Size)
@@ -54,7 +56,7 @@ namespace ChaosRL
         }
         //------------------------------------------------------------------
         // Scalar tensor constructor
-        public Tensor( float scalar, string name = "" ) : this( new[] { 1 }, new[] { scalar }, name )
+        public Tensor( float scalar, string name = "", bool requiresGrad = true ) : this( new[] { 1 }, new[] { scalar }, name, requiresGrad )
         {
         }
         //------------------------------------------------------------------
@@ -79,12 +81,19 @@ namespace ChaosRL
             for (int i = 0; i < resultSize; i++)
                 result.Data[ i ] = a.Data[ i % sizeA ] + b.Data[ i % sizeB ];
 
+            result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            float aGradScale = a.RequiresGrad ? 1f : 0f;
+            float bGradScale = b.RequiresGrad ? 1f : 0f;
+
             result._backward = () =>
             {
                 for (int i = 0; i < resultSize; i++)
                 {
-                    a.Grad[ i % sizeA ] += result.Grad[ i ];
-                    b.Grad[ i % sizeB ] += result.Grad[ i ];
+                    a.Grad[ i % sizeA ] += result.Grad[ i ] * aGradScale;
+                    b.Grad[ i % sizeB ] += result.Grad[ i ] * bGradScale;
                 }
             };
             return result;
@@ -106,12 +115,19 @@ namespace ChaosRL
             for (int i = 0; i < resultSize; i++)
                 result.Data[ i ] = a.Data[ i % sizeA ] * b.Data[ i % sizeB ];
 
+            result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            float aGradScale = a.RequiresGrad ? 1f : 0f;
+            float bGradScale = b.RequiresGrad ? 1f : 0f;
+
             result._backward = () =>
             {
                 for (int i = 0; i < resultSize; i++)
                 {
-                    a.Grad[ i % sizeA ] += b.Data[ i % sizeB ] * result.Grad[ i ];
-                    b.Grad[ i % sizeB ] += a.Data[ i % sizeA ] * result.Grad[ i ];
+                    a.Grad[ i % sizeA ] += b.Data[ i % sizeB ] * result.Grad[ i ] * aGradScale;
+                    b.Grad[ i % sizeB ] += a.Data[ i % sizeA ] * result.Grad[ i ] * bGradScale;
                 }
             };
             return result;
@@ -142,14 +158,21 @@ namespace ChaosRL
             for (int i = 0; i < resultSize; i++)
                 result.Data[ i ] = a.Data[ i % sizeA ] / b.Data[ i % sizeB ];
 
+            result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            float aGradScale = a.RequiresGrad ? 1f : 0f;
+            float bGradScale = b.RequiresGrad ? 1f : 0f;
+
             result._backward = () =>
             {
                 for (int i = 0; i < resultSize; i++)
                 {
                     int idxA = i % sizeA;
                     int idxB = i % sizeB;
-                    a.Grad[ idxA ] += (1f / b.Data[ idxB ]) * result.Grad[ i ];
-                    b.Grad[ idxB ] += (-a.Data[ idxA ] / (b.Data[ idxB ] * b.Data[ idxB ])) * result.Grad[ i ];
+                    a.Grad[ idxA ] += (1f / b.Data[ idxB ]) * result.Grad[ i ] * aGradScale;
+                    b.Grad[ idxB ] += (-a.Data[ idxA ] / (b.Data[ idxB ] * b.Data[ idxB ])) * result.Grad[ i ] * bGradScale;
                 }
             };
             return result;
@@ -160,6 +183,10 @@ namespace ChaosRL
             var result = new Tensor( Shape, new[] { this }, $"^{exponent}" );
             for (int i = 0; i < Size; i++)
                 result.Data[ i ] = MathF.Pow( Data[ i ], exponent );
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             result._backward = () =>
             {
@@ -175,6 +202,10 @@ namespace ChaosRL
             for (int i = 0; i < Size; i++)
                 result.Data[ i ] = MathF.Exp( Data[ i ] );
 
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
             result._backward = () =>
             {
                 for (int i = 0; i < Size; i++)
@@ -188,6 +219,10 @@ namespace ChaosRL
             var result = new Tensor( Shape, new[] { this }, "log" );
             for (int i = 0; i < Size; i++)
                 result.Data[ i ] = MathF.Log( Data[ i ] );
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             result._backward = () =>
             {
@@ -203,6 +238,10 @@ namespace ChaosRL
             for (int i = 0; i < Size; i++)
                 result.Data[ i ] = Data[ i ] > 0 ? Data[ i ] : 0;
 
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
             result._backward = () =>
             {
                 for (int i = 0; i < Size; i++)
@@ -217,6 +256,10 @@ namespace ChaosRL
             for (int i = 0; i < Size; i++)
                 result.Data[ i ] = MathF.Tanh( Data[ i ] );
 
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
             result._backward = () =>
             {
                 for (int i = 0; i < Size; i++)
@@ -230,6 +273,10 @@ namespace ChaosRL
             var result = new Tensor( Shape, new[] { this }, "clamp" );
             for (int i = 0; i < Size; i++)
                 result.Data[ i ] = Math.Max( min, Math.Min( max, Data[ i ] ) );
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             result._backward = () =>
             {
@@ -255,16 +302,22 @@ namespace ChaosRL
             for (int i = 0; i < resultSize; i++)
                 result.Data[ i ] = Math.Max( a.Data[ i % sizeA ], b.Data[ i % sizeB ] );
 
+            result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            float aGradScale = a.RequiresGrad ? 1f : 0f;
+            float bGradScale = b.RequiresGrad ? 1f : 0f;
+
             result._backward = () =>
             {
                 for (int i = 0; i < resultSize; i++)
                 {
                     int idxA = i % sizeA;
                     int idxB = i % sizeB;
-                    if (a.Data[ idxA ] >= b.Data[ idxB ])
-                        a.Grad[ idxA ] += result.Grad[ i ];
-                    else
-                        b.Grad[ idxB ] += result.Grad[ i ];
+                    float isAMax = a.Data[ idxA ] >= b.Data[ idxB ] ? 1f : 0f;
+                    a.Grad[ idxA ] += result.Grad[ i ] * isAMax * aGradScale;
+                    b.Grad[ idxB ] += result.Grad[ i ] * (1f - isAMax) * bGradScale;
                 }
             };
             return result;
@@ -285,16 +338,22 @@ namespace ChaosRL
             for (int i = 0; i < resultSize; i++)
                 result.Data[ i ] = Math.Min( a.Data[ i % sizeA ], b.Data[ i % sizeB ] );
 
+            result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            float aGradScale = a.RequiresGrad ? 1f : 0f;
+            float bGradScale = b.RequiresGrad ? 1f : 0f;
+
             result._backward = () =>
             {
                 for (int i = 0; i < resultSize; i++)
                 {
                     int idxA = i % sizeA;
                     int idxB = i % sizeB;
-                    if (a.Data[ idxA ] <= b.Data[ idxB ])
-                        a.Grad[ idxA ] += result.Grad[ i ];
-                    else
-                        b.Grad[ idxB ] += result.Grad[ i ];
+                    float isAMin = a.Data[ idxA ] <= b.Data[ idxB ] ? 1f : 0f;
+                    a.Grad[ idxA ] += result.Grad[ i ] * isAMin * aGradScale;
+                    b.Grad[ idxB ] += result.Grad[ i ] * (1f - isAMin) * bGradScale;
                 }
             };
             return result;
@@ -333,34 +392,44 @@ namespace ChaosRL
                 }
             }
 
+            result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
             // Backward pass
             result._backward = () =>
             {
                 // dL/dA[i,k] = sum_j dL/dC[i,j] * B[k,j]
-                for (int i = 0; i < M; i++)
+                if (this.RequiresGrad)
                 {
-                    for (int k = 0; k < K; k++)
+                    for (int i = 0; i < M; i++)
                     {
-                        float grad_sum = 0f;
-                        for (int j = 0; j < N; j++)
+                        for (int k = 0; k < K; k++)
                         {
-                            grad_sum += result.Grad[ i * N + j ] * other.Data[ k * N + j ];
+                            float grad_sum = 0f;
+                            for (int j = 0; j < N; j++)
+                            {
+                                grad_sum += result.Grad[ i * N + j ] * other.Data[ k * N + j ];
+                            }
+                            Grad[ i * K + k ] += grad_sum;
                         }
-                        Grad[ i * K + k ] += grad_sum;
                     }
                 }
 
                 // dL/dB[k,j] = sum_i dL/dC[i,j] * A[i,k]
-                for (int k = 0; k < K; k++)
+                if (other.RequiresGrad)
                 {
-                    for (int j = 0; j < N; j++)
+                    for (int k = 0; k < K; k++)
                     {
-                        float grad_sum = 0f;
-                        for (int i = 0; i < M; i++)
+                        for (int j = 0; j < N; j++)
                         {
-                            grad_sum += result.Grad[ i * N + j ] * Data[ i * K + k ];
+                            float grad_sum = 0f;
+                            for (int i = 0; i < M; i++)
+                            {
+                                grad_sum += result.Grad[ i * N + j ] * Data[ i * K + k ];
+                            }
+                            other.Grad[ k * N + j ] += grad_sum;
                         }
-                        other.Grad[ k * N + j ] += grad_sum;
                     }
                 }
             };
@@ -379,6 +448,10 @@ namespace ChaosRL
             for (int i = 0; i < Size; i++)
                 sum += Data[ i ];
             result.Data[ 0 ] = sum;
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             result._backward = () =>
             {
@@ -445,6 +518,10 @@ namespace ChaosRL
                     result.Data[ outer * innerSize + inner ] = sum;
                 }
             }
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             // Backward: broadcast grad back over reduced dim
             result._backward = () =>
@@ -513,6 +590,10 @@ namespace ChaosRL
                 }
             }
             result.Data[ 0 ] = maxVal;
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             result._backward = () =>
             {
@@ -587,6 +668,10 @@ namespace ChaosRL
                     maxIndices[ outIdx ] = baseIdx + maxLocalIdx * innerSize;
                 }
             }
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             // Backward: gradient only flows to max elements
             result._backward = () =>
@@ -711,6 +796,9 @@ namespace ChaosRL
             var result = new Tensor( newShape, new[] { this }, $"unsqueeze({dim})" );
             result.Data = this.Data; // Share data array
             result.Grad = this.Grad; // Share grad array
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
 
             result._backward = () =>
             {
@@ -759,6 +847,9 @@ namespace ChaosRL
                 var result = new Tensor( newShape, new[] { this }, $"squeeze({d})" );
                 result.Data = this.Data; // Share data array
                 result.Grad = this.Grad; // Share grad array
+                result.RequiresGrad = this.RequiresGrad;
+                if (result.RequiresGrad == false)
+                    return result;
 
                 result._backward = () =>
                 {
@@ -784,6 +875,9 @@ namespace ChaosRL
                 var result = new Tensor( newShape, new[] { this }, "squeeze()" );
                 result.Data = this.Data; // Share data array
                 result.Grad = this.Grad; // Share grad array
+                result.RequiresGrad = this.RequiresGrad;
+                if (result.RequiresGrad == false)
+                    return result;
 
                 result._backward = () =>
                 {
