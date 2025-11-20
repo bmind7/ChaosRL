@@ -202,10 +202,7 @@ namespace ChaosRL
 
             int[] indices = Enumerable.Range( 0, totalElements ).ToArray();
 
-            float averageLoss = 0f;
-            float totalPgLossSum = 0f;
-            float totalEntropyLossSum = 0f;
-            float totalValueLossSum = 0f;
+            float averageLoss = 0f, totalPgLossSum = 0f, totalEntropyLossSum = 0f, totalValueLossSum = 0f;
             int batchCount = 0;
 
             for (int epoch = 0; epoch < _updateEpochs; epoch++)
