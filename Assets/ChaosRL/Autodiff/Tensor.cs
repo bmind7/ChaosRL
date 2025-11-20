@@ -202,6 +202,65 @@ namespace ChaosRL
             return result;
         }
         //------------------------------------------------------------------
+        public Tensor Sqrt()
+        {
+            return Pow( 0.5f );
+        }
+        //------------------------------------------------------------------
+        /// Normalizes the tensor: (x - mean) / sqrt(variance + epsilon)
+        /// Supports normalization over entire tensor (dim=null), first dimension (dim=0), 
+        /// or last dimension (dim=-1 or dim=rank-1).
+        /// </summary>
+        /// <param name="dim">Optional dimension to normalize along. 
+        /// null: normalize entire tensor
+        /// 0: normalize along first dimension (batch normalization style)
+        /// -1 or last: normalize along last dimension (layer normalization style)</param>
+        /// <param name="epsilon">Small value to prevent division by zero (default 1e-5)</param>
+        /// <returns>Normalized tensor</returns>
+        public Tensor Normalize( int? dim = null, float epsilon = 1e-5f )
+        {
+            if (!dim.HasValue)
+            {
+                // Normalize entire tensor
+                var mean = Mean();
+                var centered = this - mean;
+                var variance = (centered * centered).Mean();
+                var std = (variance + epsilon).Sqrt();
+                return centered / std;
+            }
+
+            int rank = Shape.Length;
+            int actualDim = dim.Value;
+            if (actualDim < 0) actualDim += rank;
+
+            // Only support dim=0 or dim=last
+            if (actualDim != 0 && actualDim != rank - 1)
+                throw new ArgumentException(
+                    $"Normalize only supports dim=null (all), dim=0 (first), or dim={rank - 1} (last). Got dim={dim.Value}" );
+
+            if (actualDim == 0)
+            {
+                // Normalize along first dimension (batch norm style)
+                var mean = Mean( 0 );
+                var centered = this - mean;
+                var variance = (centered * centered).Mean( 0 );
+                var std = (variance + epsilon).Sqrt();
+                return centered / std;
+            }
+            else
+            {
+                // Normalize along last dimension (layer norm style)
+                // Use ExpandLast to match dimensions for broadcasting
+                var mean = Mean( rank - 1 );
+                var meanExpanded = mean.ExpandLast( Shape[ rank - 1 ] );
+                var centered = this - meanExpanded;
+                var variance = (centered * centered).Mean( rank - 1 );
+                var varianceExpanded = variance.ExpandLast( Shape[ rank - 1 ] );
+                var std = (varianceExpanded + epsilon).Sqrt();
+                return centered / std;
+            }
+        }
+        //------------------------------------------------------------------
         public Tensor Exp()
         {
             var result = new Tensor( Shape, new[] { this }, "exp" );
@@ -963,6 +1022,54 @@ namespace ChaosRL
 
                 return result;
             }
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Expands the tensor by repeating the last dimension.
+        /// For example, shape [3, 2] with num=5 becomes [3, 2, 5] where each element is replicated 5 times.
+        /// </summary>
+        /// <param name="num">Number of times to repeat the last dimension</param>
+        /// <returns>New tensor with expanded shape</returns>
+        public Tensor ExpandLast( int num )
+        {
+            if (num <= 0)
+                throw new ArgumentException( $"Number of repetitions must be positive, got {num}" );
+
+            // Build new shape: original shape + new dimension of size num
+            var newShape = new int[ Shape.Length + 1 ];
+            for (int i = 0; i < Shape.Length; i++)
+                newShape[ i ] = Shape[ i ];
+            newShape[ Shape.Length ] = num;
+
+            int newSize = Size * num;
+            var result = new Tensor( newShape, new[] { this }, $"expandLast({num})" );
+
+            // Forward pass: replicate each element num times
+            for (int i = 0; i < Size; i++)
+            {
+                for (int j = 0; j < num; j++)
+                {
+                    result.Data[ i * num + j ] = Data[ i ];
+                }
+            }
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            // Backward pass: accumulate gradients from all replications
+            result._backward = () =>
+            {
+                for (int i = 0; i < Size; i++)
+                {
+                    for (int j = 0; j < num; j++)
+                    {
+                        Grad[ i ] += result.Grad[ i * num + j ];
+                    }
+                }
+            };
+
+            return result;
         }
         //------------------------------------------------------------------
         /// <summary>

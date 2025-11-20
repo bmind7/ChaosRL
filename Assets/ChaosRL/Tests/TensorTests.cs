@@ -419,6 +419,234 @@ namespace ChaosRL.Tests
         }
         //------------------------------------------------------------------
         [Test]
+        public void Sqrt_ComputesForwardAndBackward()
+        {
+            var a = new Tensor( new[] { 3 }, new[] { 4.0f, 9.0f, 16.0f } );
+            var y = a.Sqrt();
+
+            Assert.That( y.Data[ 0 ], Is.EqualTo( 2.0f ).Within( 1e-6 ) );
+            Assert.That( y.Data[ 1 ], Is.EqualTo( 3.0f ).Within( 1e-6 ) );
+            Assert.That( y.Data[ 2 ], Is.EqualTo( 4.0f ).Within( 1e-6 ) );
+
+            y.Backward();
+            // dy/da = 0.5 * a^(-0.5) = 1/(2*sqrt(a))
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0.25f ).Within( 1e-5 ) );      // 1/(2*2) = 0.25
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 1.0f / 6.0f ).Within( 1e-5 ) ); // 1/(2*3) = 1/6
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 0.125f ).Within( 1e-5 ) );     // 1/(2*4) = 0.125
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sqrt_ScalarTensor_WorksCorrectly()
+        {
+            var a = new Tensor( 25.0f );
+            var y = a.Sqrt();
+
+            Assert.That( y.Data[ 0 ], Is.EqualTo( 5.0f ).Within( 1e-6 ) );
+
+            y.Backward();
+            // dy/da = 1/(2*sqrt(25)) = 1/10 = 0.1
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0.1f ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sqrt_ChainedWithOperations_ComputesGradientsCorrectly()
+        {
+            var a = new Tensor( new[] { 2 }, new[] { 4.0f, 9.0f } );
+            var b = new Tensor( new[] { 2 }, new[] { 2.0f, 3.0f } );
+
+            var c = a * b;  // [8, 27]
+            var d = c.Sqrt(); // [2.828..., 5.196...]
+            var e = d.Sum(); // scalar
+
+            e.Backward();
+
+            // de/dd = 1, dd/dc = 1/(2*sqrt(c)), dc/da = b
+            // da = b * 1/(2*sqrt(a*b))
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 2.0f / (2.0f * MathF.Sqrt( 8.0f )) ).Within( 1e-5 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 3.0f / (2.0f * MathF.Sqrt( 27.0f )) ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Sqrt_2DTensor_ComputesCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 2 }, new[] { 1.0f, 4.0f, 9.0f, 16.0f } );
+            var y = a.Sqrt();
+
+            Assert.That( y.Shape, Is.EqualTo( new[] { 2, 2 } ) );
+            Assert.That( y.Data[ 0 ], Is.EqualTo( 1.0f ).Within( 1e-6 ) );
+            Assert.That( y.Data[ 1 ], Is.EqualTo( 2.0f ).Within( 1e-6 ) );
+            Assert.That( y.Data[ 2 ], Is.EqualTo( 3.0f ).Within( 1e-6 ) );
+            Assert.That( y.Data[ 3 ], Is.EqualTo( 4.0f ).Within( 1e-6 ) );
+
+            y.Backward();
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0.5f ).Within( 1e-5 ) );       // 1/(2*1)
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 0.25f ).Within( 1e-5 ) );      // 1/(2*2)
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 1.0f / 6.0f ).Within( 1e-5 ) ); // 1/(2*3)
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 0.125f ).Within( 1e-5 ) );     // 1/(2*4)
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_EntireTensor_ProducesMeanZeroUnitVariance()
+        {
+            var a = new Tensor( new[] { 4 }, new[] { 1f, 2f, 3f, 4f } );
+            var normalized = a.Normalize();
+
+            // Verify mean is approximately 0
+            var mean = normalized.Data.Average();
+            Assert.That( mean, Is.EqualTo( 0f ).Within( 1e-5 ) );
+
+            // Verify variance is approximately 1
+            var variance = normalized.Data.Select( x => x * x ).Average();
+            Assert.That( variance, Is.EqualTo( 1f ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_EntireTensor_BackwardPropagatesCorrectly()
+        {
+            var a = new Tensor( new[] { 3 }, new[] { 0f, 2f, 3f } );
+            var normalized = a.Normalize();
+            var loss = normalized.Sum();
+
+            loss.Backward();
+
+            // Gradients should be non-zero
+            Assert.That( a.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+            Assert.That( a.Grad[ 1 ], Is.Not.EqualTo( 0f ) );
+            Assert.That( a.Grad[ 2 ], Is.Not.EqualTo( 0f ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_AlongDimension_2DTensor()
+        {
+            // [[1, 2, 3],
+            //  [4, 5, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // Normalize along dimension 1 (normalize each row)
+            var normalized = a.Normalize( dim: 1 );
+
+            Assert.That( normalized.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+
+            UnityEngine.Debug.Log( "Normalized Tensor:" );
+            for (int i = 0; i < normalized.Size; i++)
+            {
+                UnityEngine.Debug.Log( normalized.Data[ i ] );
+            }
+
+            // Each row should have mean ~0 and variance ~1
+            // Row 0: [1, 2, 3] -> normalized
+            var row0Mean = (normalized.Data[ 0 ] + normalized.Data[ 1 ] + normalized.Data[ 2 ]) / 3f;
+            Assert.That( row0Mean, Is.EqualTo( 0f ).Within( 1e-5 ) );
+
+            // Row 1: [4, 5, 6] -> normalized
+            var row1Mean = (normalized.Data[ 3 ] + normalized.Data[ 4 ] + normalized.Data[ 5 ]) / 3f;
+            Assert.That( row1Mean, Is.EqualTo( 0f ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_AlongDimension0_2DTensor()
+        {
+            // [[1, 4],
+            //  [2, 5],
+            //  [3, 6]]
+            var a = new Tensor( new[] { 3, 2 }, new[] { 1f, 4f, 2f, 5f, 3f, 6f } );
+
+            // Normalize along dimension 0 (normalize each column)
+            var normalized = a.Normalize( dim: 0 );
+
+            Assert.That( normalized.Shape, Is.EqualTo( new[] { 3, 2 } ) );
+
+            // Each column should have mean ~0
+            // Column 0: [1, 2, 3] -> normalized
+            var col0Mean = (normalized.Data[ 0 ] + normalized.Data[ 2 ] + normalized.Data[ 4 ]) / 3f;
+            Assert.That( col0Mean, Is.EqualTo( 0f ).Within( 1e-5 ) );
+
+            // Column 1: [4, 5, 6] -> normalized
+            var col1Mean = (normalized.Data[ 1 ] + normalized.Data[ 3 ] + normalized.Data[ 5 ]) / 3f;
+            Assert.That( col1Mean, Is.EqualTo( 0f ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_AlongDimension_BackwardPropagatesCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 2.1f, 0.4f, 4.5f, 4.5f, 5.2f, 6.6f } );
+            var normalized = a.Normalize( dim: 1 );
+            UnityEngine.Debug.Log( "Normalized Tensor:" );
+            for (int i = 0; i < normalized.Size; i++)
+            {
+                UnityEngine.Debug.Log( normalized.Data[ i ] );
+            }
+            var loss = (normalized * normalized).Sum();
+
+            loss.Backward();
+
+            // All gradients should be non-zero
+            for (int i = 0; i < a.Size; i++)
+            {
+                Assert.That( a.Grad[ i ], Is.Not.EqualTo( 0f ) );
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_WithEpsilon_PreventsZeroDivision()
+        {
+            // Constant tensor would have zero variance
+            var a = new Tensor( new[] { 4 }, new[] { 5f, 5f, 5f, 5f } );
+
+            // Should not throw with epsilon
+            var normalized = a.Normalize( epsilon: 1e-5f );
+
+            // Result should be all zeros (since all values equal mean)
+            for (int i = 0; i < normalized.Size; i++)
+            {
+                Assert.That( normalized.Data[ i ], Is.EqualTo( 0f ).Within( 1e-5 ) );
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_NegativeDimension_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = i + 1;
+
+            // dim=-1 should be equivalent to dim=2 (last dimension)
+            var normalized = a.Normalize( dim: -1 );
+
+            Assert.That( normalized.Shape, Is.EqualTo( new[] { 2, 3, 4 } ) );
+
+            // Should complete without errors
+            var loss = normalized.Sum();
+            loss.Backward();
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Normalize_LayerNormUseCase_WorksCorrectly()
+        {
+            // Simulating layer normalization for a batch of sequences
+            // Shape: [batch=2, seq_len=3, features=4]
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = (float)(i % 7) - 3f; // Mix of positive and negative values
+
+            // Normalize along the feature dimension (dim=2)
+            var normalized = a.Normalize( dim: 2 );
+
+            Assert.That( normalized.Shape, Is.EqualTo( new[] { 2, 3, 4 } ) );
+
+            // Each set of 4 features should have mean ~0 and std ~1
+            // Check first feature vector
+            var slice0Mean = (normalized.Data[ 0 ] + normalized.Data[ 1 ] +
+                             normalized.Data[ 2 ] + normalized.Data[ 3 ]) / 4f;
+            Assert.That( slice0Mean, Is.EqualTo( 0f ).Within( 1e-4 ) );
+
+            // Backward should work
+            var loss = (normalized * normalized).Sum();
+            loss.Backward();
+            Assert.That( a.Grad[ 0 ], Is.Not.EqualTo( 0f ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
         public void ReLU_Positive_Negative_And_Zero()
         {
             var a = new Tensor( new[] { 4 }, new[] { 3.0f, -2.0f, 0.0f, 5.0f } );
@@ -1847,6 +2075,169 @@ namespace ChaosRL.Tests
             // All should share same data
             Assert.AreSame( a.Data, e.Data );
             Assert.AreSame( a.Grad, e.Grad );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_2DTo3D_ReplicatesElements()
+        {
+            // [3, 2] -> [3, 2, 5]
+            var a = new Tensor( new[] { 3, 2 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.ExpandLast( 5 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 3, 2, 5 } ) );
+            Assert.That( b.Size, Is.EqualTo( 30 ) );
+
+            // Each element should be replicated 5 times
+            // First element (1f) at positions 0-4
+            for (int i = 0; i < 5; i++)
+                Assert.That( b.Data[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+
+            // Second element (2f) at positions 5-9
+            for (int i = 5; i < 10; i++)
+                Assert.That( b.Data[ i ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+
+            // Third element (3f) at positions 10-14
+            for (int i = 10; i < 15; i++)
+                Assert.That( b.Data[ i ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_1DTo2D_WorksCorrectly()
+        {
+            // [4] -> [4, 3]
+            var a = new Tensor( new[] { 4 }, new[] { 1f, 2f, 3f, 4f } );
+            var b = a.ExpandLast( 3 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 4, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 12 ) );
+
+            // Check pattern: [1,1,1, 2,2,2, 3,3,3, 4,4,4]
+            Assert.That( b.Data[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 3 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 4 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 5 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_ScalarTo1D_WorksCorrectly()
+        {
+            // [1] -> [1, 5]
+            var a = new Tensor( new[] { 1 }, new[] { 7f } );
+            var b = a.ExpandLast( 5 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 1, 5 } ) );
+            Assert.That( b.Size, Is.EqualTo( 5 ) );
+
+            // All elements should be 7
+            for (int i = 0; i < 5; i++)
+                Assert.That( b.Data[ i ], Is.EqualTo( 7f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_Backward_AccumulatesGradients()
+        {
+            // [3, 2] -> [3, 2, 4]
+            var a = new Tensor( new[] { 3, 2 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.ExpandLast( 4 );
+            var c = b.Sum();
+
+            c.Backward();
+
+            // Each element in 'a' was replicated 4 times, so gradient should be 4
+            for (int i = 0; i < 6; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_Backward_WithMultiplication()
+        {
+            // [2, 3] -> [2, 3, 2]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.ExpandLast( 2 );
+            var c = b * 3f;
+            var d = c.Sum();
+
+            d.Backward();
+
+            // Each element multiplied by 3, then gradient flows back through expansion
+            for (int i = 0; i < 6; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 6f ).Within( 1e-6 ) ); // 3 * 2 repetitions
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_3DTensor_AddsAnotherDimension()
+        {
+            // [2, 3, 4] -> [2, 3, 4, 3]
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = i + 1;
+
+            var b = a.ExpandLast( 3 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3, 4, 3 } ) );
+            Assert.That( b.Size, Is.EqualTo( 72 ) );
+
+            // Check first element is replicated 3 times
+            Assert.That( b.Data[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+
+            // Check second element is replicated 3 times
+            Assert.That( b.Data[ 3 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 4 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( b.Data[ 5 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_InvalidNumber_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            Assert.Throws<ArgumentException>( () => a.ExpandLast( 0 ) );
+            Assert.Throws<ArgumentException>( () => a.ExpandLast( -1 ) );
+            Assert.Throws<ArgumentException>( () => a.ExpandLast( -5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_ChainedOperations_WorksCorrectly()
+        {
+            // [3] -> [3, 2] -> sum
+            var a = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f } );
+            var b = a.ExpandLast( 2 );
+            var c = b + 10f;
+            var d = c.Sum();
+
+            Assert.That( d.Data[ 0 ], Is.EqualTo( 72f ).Within( 1e-6 ) ); // (1+10)*2 + (2+10)*2 + (3+10)*2 = 22+24+26 = 72
+
+            d.Backward();
+
+            // Gradient should accumulate through expansion and addition
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ExpandLast_ExpansionByOne_SameAsSingleReplication()
+        {
+            // [2, 3] -> [2, 3, 1]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+            var b = a.ExpandLast( 1 );
+
+            Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3, 1 } ) );
+            Assert.That( b.Size, Is.EqualTo( 6 ) );
+
+            // Data should be the same
+            for (int i = 0; i < 6; i++)
+                Assert.That( b.Data[ i ], Is.EqualTo( a.Data[ i ] ).Within( 1e-6 ) );
+
+            b.Backward();
+
+            // Gradient should be 1 for each element
+            for (int i = 0; i < 6; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 1f ).Within( 1e-6 ) );
         }
         //------------------------------------------------------------------
         [Test]
