@@ -1760,5 +1760,246 @@ namespace ChaosRL.Tests
             Assert.That( b.Grad[ 0 ], Is.EqualTo( 0f ) );
         }
         //------------------------------------------------------------------
+        [Test]
+        public void Indexer_1DTensor_GetAndSet()
+        {
+            var a = new Tensor( new[] { 5 }, new[] { 1f, 2f, 3f, 4f, 5f } );
+
+            // Test getter
+            Assert.That( a[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( a[ 4 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+
+            // Test setter
+            a[ 1 ] = 10f;
+            Assert.That( a[ 1 ], Is.EqualTo( 10f ).Within( 1e-6 ) );
+            Assert.That( a.Data[ 1 ], Is.EqualTo( 10f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_2DTensor_GetAndSet()
+        {
+            // [[1, 2, 3],
+            //  [4, 5, 6]]
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // Test getter
+            Assert.That( a[ 0, 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 0 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 1 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 2 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+
+            // Test setter
+            a[ 1, 1 ] = 50f;
+            Assert.That( a[ 1, 1 ], Is.EqualTo( 50f ).Within( 1e-6 ) );
+            Assert.That( a.Data[ 4 ], Is.EqualTo( 50f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_3DTensor_GetAndSet()
+        {
+            // 2×2×3 tensor
+            var a = new Tensor( new[] { 2, 2, 3 } );
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i + 1;
+
+            // Test getter with various indices
+            Assert.That( a[ 0, 0, 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 0, 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 0, 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 1, 0 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 0, 0 ], Is.EqualTo( 7f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 1, 2 ], Is.EqualTo( 12f ).Within( 1e-6 ) );
+
+            // Test setter
+            a[ 1, 0, 1 ] = 100f;
+            Assert.That( a[ 1, 0, 1 ], Is.EqualTo( 100f ).Within( 1e-6 ) );
+            Assert.That( a.Data[ 7 ], Is.EqualTo( 100f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_4DTensor_GetAndSet()
+        {
+            // 2×2×2×2 tensor
+            var a = new Tensor( new[] { 2, 2, 2, 2 } );
+            for (int i = 0; i < 16; i++)
+                a.Data[ i ] = i;
+
+            // Test getter
+            Assert.That( a[ 0, 0, 0, 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 0, 0, 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 1, 1, 1 ], Is.EqualTo( 15f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 0, 1, 0 ], Is.EqualTo( 10f ).Within( 1e-6 ) );
+
+            // Test setter
+            a[ 0, 1, 0, 1 ] = 99f;
+            Assert.That( a[ 0, 1, 0, 1 ], Is.EqualTo( 99f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_WrongNumberOfIndices_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // Too few indices
+            Assert.Throws<ArgumentException>( () => { var x = a[ 0 ]; } );
+
+            // Too many indices
+            Assert.Throws<ArgumentException>( () => { var x = a[ 0, 1, 2 ]; } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_OutOfBounds_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
+
+            // First dimension out of bounds
+            Assert.Throws<IndexOutOfRangeException>( () => { var x = a[ 2, 0 ]; } );
+            Assert.Throws<IndexOutOfRangeException>( () => { var x = a[ -1, 0 ]; } );
+
+            // Second dimension out of bounds
+            Assert.Throws<IndexOutOfRangeException>( () => { var x = a[ 0, 3 ]; } );
+            Assert.Throws<IndexOutOfRangeException>( () => { var x = a[ 1, -1 ]; } );
+
+            // Both dimensions out of bounds
+            Assert.Throws<IndexOutOfRangeException>( () => { var x = a[ 5, 10 ]; } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_SetterOutOfBounds_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<IndexOutOfRangeException>( () => { a[ 2, 0 ] = 1f; } );
+            Assert.Throws<IndexOutOfRangeException>( () => { a[ 0, 3 ] = 1f; } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_MatchesFlatArrayIndexing()
+        {
+            // Verify that indexer produces same results as direct flat array access
+            var a = new Tensor( new[] { 3, 4 } );
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i * 10;
+
+            for (int i = 0; i < 3; i++)
+            {
+                for (int j = 0; j < 4; j++)
+                {
+                    int flatIndex = i * 4 + j;
+                    Assert.That( a[ i, j ], Is.EqualTo( a.Data[ flatIndex ] ).Within( 1e-6 ),
+                        $"Mismatch at [{i},{j}]" );
+                }
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_WithOperations_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 2 }, new[] { 1f, 2f, 3f, 4f } );
+
+            // Modify using indexer
+            a[ 0, 0 ] = 10f;
+            a[ 1, 1 ] = 40f;
+
+            // Use in operations
+            var b = new Tensor( new[] { 2, 2 }, new[] { 2f, 2f, 2f, 2f } );
+            var c = a * b;
+
+            // Results should reflect the modified values
+            Assert.That( c[ 0, 0 ], Is.EqualTo( 20f ).Within( 1e-6 ) ); // 10 * 2
+            Assert.That( c[ 0, 1 ], Is.EqualTo( 4f ).Within( 1e-6 ) );  // 2 * 2
+            Assert.That( c[ 1, 0 ], Is.EqualTo( 6f ).Within( 1e-6 ) );  // 3 * 2
+            Assert.That( c[ 1, 1 ], Is.EqualTo( 80f ).Within( 1e-6 ) ); // 40 * 2
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_PopulateEntireTensor_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 3, 3 } );
+
+            // Populate using indexer
+            for (int i = 0; i < 3; i++)
+                for (int j = 0; j < 3; j++)
+                    a[ i, j ] = i * 10 + j;
+
+            // Verify values
+            Assert.That( a[ 0, 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 0 ], Is.EqualTo( 10f ).Within( 1e-6 ) );
+            Assert.That( a[ 2, 2 ], Is.EqualTo( 22f ).Within( 1e-6 ) );
+
+            // Verify data array is populated correctly
+            Assert.That( a.Data[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Data[ 4 ], Is.EqualTo( 11f ).Within( 1e-6 ) );
+            Assert.That( a.Data[ 8 ], Is.EqualTo( 22f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_NullIndices_ThrowsException()
+        {
+            var a = new Tensor( new[] { 2, 3 } );
+
+            Assert.Throws<ArgumentException>( () => { var x = a[ (int[])null ]; } );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_ScalarTensor_AccessWithSingleIndex()
+        {
+            var a = new Tensor( 42f );
+
+            // Access scalar as [0]
+            Assert.That( a[ 0 ], Is.EqualTo( 42f ).Within( 1e-6 ) );
+
+            // Modify scalar
+            a[ 0 ] = 100f;
+            Assert.That( a[ 0 ], Is.EqualTo( 100f ).Within( 1e-6 ) );
+            Assert.That( a.Data[ 0 ], Is.EqualTo( 100f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_LargeTensor_CorrectIndexCalculation()
+        {
+            // Test with larger tensor to ensure index calculation is correct
+            var a = new Tensor( new[] { 5, 4, 3 } );
+            for (int i = 0; i < 60; i++)
+                a.Data[ i ] = i;
+
+            // Test several random access patterns
+            Assert.That( a[ 0, 0, 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 0, 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a[ 0, 3, 2 ], Is.EqualTo( 11f ).Within( 1e-6 ) );
+            Assert.That( a[ 2, 1, 1 ], Is.EqualTo( 28f ).Within( 1e-6 ) );
+            Assert.That( a[ 4, 3, 2 ], Is.EqualTo( 59f ).Within( 1e-6 ) );
+
+            // Verify calculations: index = i*12 + j*3 + k
+            Assert.That( a[ 1, 0, 0 ], Is.EqualTo( 12f ).Within( 1e-6 ) );
+            Assert.That( a[ 1, 2, 1 ], Is.EqualTo( 19f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Indexer_RowMajorOrderVerification()
+        {
+            // Verify row-major (C-style) ordering
+            // For shape [2, 3], layout should be:
+            // [0,0]=0, [0,1]=1, [0,2]=2, [1,0]=3, [1,1]=4, [1,2]=5
+            var a = new Tensor( new[] { 2, 3 } );
+            for (int i = 0; i < 6; i++)
+                a.Data[ i ] = i;
+
+            int counter = 0;
+            for (int i = 0; i < 2; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    Assert.That( a[ i, j ], Is.EqualTo( counter ).Within( 1e-6 ),
+                        $"Row-major order violation at [{i},{j}], expected {counter}" );
+                    counter++;
+                }
+            }
+        }
+        //------------------------------------------------------------------
     }
 }

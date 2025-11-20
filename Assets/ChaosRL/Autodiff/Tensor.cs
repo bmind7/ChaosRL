@@ -23,6 +23,12 @@ namespace ChaosRL
 
         private Action _backward;
         //------------------------------------------------------------------
+        public float this[ params int[] indices ]
+        {
+            get => Data[ ToFlatIndex( indices ) ];
+            set => Data[ ToFlatIndex( indices ) ] = value;
+        }
+        //------------------------------------------------------------------
         public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
         {
             if (shape == null || shape.Length == 0)
@@ -886,6 +892,29 @@ namespace ChaosRL
 
                 return result;
             }
+        }
+        //------------------------------------------------------------------
+        private int ToFlatIndex( int[] indices )
+        {
+            if (indices == null || indices.Length != Shape.Length)
+                throw new ArgumentException(
+                    $"Expected {Shape.Length} indices but got {indices?.Length ?? 0}" );
+
+            int flatIndex = 0;
+            int stride = 1;
+
+            // Convert multi-dimensional indices to flat index (row-major order)
+            for (int i = Shape.Length - 1; i >= 0; i--)
+            {
+                if (indices[ i ] < 0 || indices[ i ] >= Shape[ i ])
+                    throw new IndexOutOfRangeException(
+                        $"Index {indices[ i ]} is out of range for dimension {i} with size {Shape[ i ]}" );
+
+                flatIndex += indices[ i ] * stride;
+                stride *= Shape[ i ];
+            }
+
+            return flatIndex;
         }
         //------------------------------------------------------------------
         public override string ToString()
