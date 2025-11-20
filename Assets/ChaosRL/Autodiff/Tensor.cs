@@ -207,6 +207,7 @@ namespace ChaosRL
             return Pow( 0.5f );
         }
         //------------------------------------------------------------------
+        /// <summary>
         /// Normalizes the tensor: (x - mean) / sqrt(variance + epsilon)
         /// Supports normalization over entire tensor (dim=null), first dimension (dim=0), 
         /// or last dimension (dim=-1 or dim=rank-1).
