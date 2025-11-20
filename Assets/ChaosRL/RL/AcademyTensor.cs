@@ -1,6 +1,5 @@
 using System;
 using System.Linq;
-using System.Runtime.InteropServices;
 
 using UnityEngine;
 
@@ -89,10 +88,9 @@ namespace ChaosRL
                     _valueNetwork.Parameters,
                 } );
 
-
             // --- Experience Replay Buffers ---
             _bufferSize = (_approxBufferSize / _numEnvs);
-            // _observationBuffer = new float[ _bufferSize, _numEnvs, _inputSize ];
+
             _observationBuffer = new Tensor( new[] { _bufferSize, _numEnvs, _inputSize }, requiresGrad: false );
             _valBuffer = new Tensor( new[] { _bufferSize, _numEnvs }, requiresGrad: false );
             _actionBuffer = new Tensor( new[] { _bufferSize, _numEnvs, _actionSize }, requiresGrad: false );
@@ -196,9 +194,21 @@ namespace ChaosRL
             var batch_returns = returns.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
             var batch_doneFlags = _doneBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
 
-            // Normalize advantages to keep the policy gradient scale well behaved
-            Span<float> advantages_span = batch_advantages.Data;
-            advantages_span = Utils.Normalize( advantages_span );
+
+
+
+
+
+            // // Normalize advantages to keep the policy gradient scale well behaved
+            // Span<float> advantages_span = batch_advantages.Data;
+            // advantages_span = Utils.Normalize( advantages_span );
+
+            batch_advantages = batch_advantages.Normalize().Reshape( new[] { totalElements, 1 } );
+
+
+
+
+
 
             int[] indices = Enumerable.Range( 0, totalElements ).ToArray();
 
