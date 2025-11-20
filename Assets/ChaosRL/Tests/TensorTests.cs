@@ -2001,5 +2001,316 @@ namespace ChaosRL.Tests
             }
         }
         //------------------------------------------------------------------
+        [Test]
+        public void Slice_Dim0_ExtractsCorrectly()
+        {
+            // Shape [4, 3]: 4 rows, 3 columns
+            var a = new Tensor( new[] { 4, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 11f, 12f } );
+
+            // Slice dimension 0: start at row 1, take 2 rows
+            var slice = a.Slice( 0, 1, 2 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // Should get rows 1 and 2: [4,5,6, 7,8,9]
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 1 ], Is.EqualTo( 5f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 2 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 3 ], Is.EqualTo( 7f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 4 ], Is.EqualTo( 8f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 5 ], Is.EqualTo( 9f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_Dim1_ExtractsCorrectly()
+        {
+            // Shape [3, 4]: 3 rows, 4 columns
+            var a = new Tensor( new[] { 3, 4 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f, 10f, 11f, 12f } );
+
+            // Slice dimension 1: start at column 1, take 2 columns
+            var slice = a.Slice( 1, 1, 2 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 3, 2 } ) );
+            // Should get columns 1-2 from each row: [2,3, 6,7, 10,11]
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 2 ], Is.EqualTo( 6f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 3 ], Is.EqualTo( 7f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 4 ], Is.EqualTo( 10f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 5 ], Is.EqualTo( 11f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_FromStart_TakesFirstElements()
+        {
+            var a = new Tensor( new[] { 5, 3 } );
+            for (int i = 0; i < 15; i++)
+                a.Data[ i ] = i + 1;
+
+            // Take first 3 rows
+            var slice = a.Slice( 0, 0, 3 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 3, 3 } ) );
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 8 ], Is.EqualTo( 9f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_ToEnd_TakesLastElements()
+        {
+            var a = new Tensor( new[] { 5, 3 } );
+            for (int i = 0; i < 15; i++)
+                a.Data[ i ] = i + 1;
+
+            // Take last 2 rows (start=3, length=2)
+            var slice = a.Slice( 0, 3, 2 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 2, 3 } ) );
+            // Rows 3-4: [10,11,12, 13,14,15]
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 10f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 5 ], Is.EqualTo( 15f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_SingleElement_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 3, 4 } );
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i + 1;
+
+            // Take 1 column from middle
+            var slice = a.Slice( 1, 2, 1 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 3, 1 } ) );
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 3f ).Within( 1e-6 ) );  // column 2, row 0
+            Assert.That( slice.Data[ 1 ], Is.EqualTo( 7f ).Within( 1e-6 ) );  // column 2, row 1
+            Assert.That( slice.Data[ 2 ], Is.EqualTo( 11f ).Within( 1e-6 ) ); // column 2, row 2
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_3DTensor_WorksCorrectly()
+        {
+            // Shape [2, 3, 4]
+            var a = new Tensor( new[] { 2, 3, 4 } );
+            for (int i = 0; i < 24; i++)
+                a.Data[ i ] = i + 1;
+
+            // Slice middle dimension: start=1, take 2
+            var slice = a.Slice( 1, 1, 2 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 2, 2, 4 } ) );
+            Assert.That( slice.Size, Is.EqualTo( 16 ) );
+
+            // First block, middle 2 rows
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 5f ).Within( 1e-6 ) );   // [0,1,0]
+            Assert.That( slice.Data[ 7 ], Is.EqualTo( 12f ).Within( 1e-6 ) );  // [0,1,3]
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_NegativeDim_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 3, 4, 5 } );
+            for (int i = 0; i < 60; i++)
+                a.Data[ i ] = i + 1;
+
+            // dim=-1 is equivalent to dim=2
+            var slice = a.Slice( -1, 2, 3 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 3, 4, 3 } ) );
+            Assert.That( slice.Size, Is.EqualTo( 36 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_Backward_GradientsFlowCorrectly()
+        {
+            var a = new Tensor( new[] { 4, 3 } );
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i + 1;
+
+            // Slice 2 rows starting from row 1
+            var slice = a.Slice( 0, 1, 2 );
+            var result = slice * 2f;
+
+            result.Backward();
+
+            // Gradients should only flow to sliced positions (rows 1-2)
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );  // row 0
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 2f ).Within( 1e-6 ) );  // row 1
+            Assert.That( a.Grad[ 4 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 5 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 6 ], Is.EqualTo( 2f ).Within( 1e-6 ) );  // row 2
+            Assert.That( a.Grad[ 7 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 8 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 9 ], Is.EqualTo( 0f ).Within( 1e-6 ) );  // row 3
+            Assert.That( a.Grad[ 10 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 11 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_ChainedOperations_ComputesGradientsCorrectly()
+        {
+            var a = new Tensor( new[] { 5, 2 } );
+            for (int i = 0; i < 10; i++)
+                a.Data[ i ] = i + 1;
+
+            // Slice rows 1-3, then sum
+            var slice = a.Slice( 0, 1, 3 );
+            var sum = slice.Sum();
+
+            // Sum should be 3+4+5+6+7+8 = 33
+            Assert.That( sum.Data[ 0 ], Is.EqualTo( 33f ).Within( 1e-6 ) );
+
+            sum.Backward();
+
+            // Gradients of 1 should flow to rows 1-3
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 4 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 5 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 6 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 7 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 8 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 9 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_MultipleSlices_GradientsAccumulate()
+        {
+            var a = new Tensor( new[] { 4, 2 } );
+            for (int i = 0; i < 8; i++)
+                a.Data[ i ] = i + 1;
+
+            var slice1 = a.Slice( 0, 0, 2 ); // rows 0-1
+            var slice2 = a.Slice( 0, 1, 2 ); // rows 1-2 (overlaps row 1)
+
+            var sum = slice1.Sum() + slice2.Sum();
+            sum.Backward();
+
+            // Row 0: only in slice1
+            Assert.That( a.Grad[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 1 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            // Row 1: in both slices, should accumulate
+            Assert.That( a.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 3 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            // Row 2: only in slice2
+            Assert.That( a.Grad[ 4 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 5 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            // Row 3: not in any slice
+            Assert.That( a.Grad[ 6 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+            Assert.That( a.Grad[ 7 ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_InvalidDimension_ThrowsException()
+        {
+            var a = new Tensor( new[] { 3, 4 } );
+
+            Assert.Throws<ArgumentException>( () => a.Slice( 2, 0, 1 ) );  // dim too large
+            Assert.Throws<ArgumentException>( () => a.Slice( -3, 0, 1 ) ); // dim too negative
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_InvalidStart_ThrowsException()
+        {
+            var a = new Tensor( new[] { 3, 4 } );
+
+            Assert.Throws<ArgumentException>( () => a.Slice( 0, -1, 1 ) ); // negative start
+            Assert.Throws<ArgumentException>( () => a.Slice( 0, 3, 1 ) );  // start out of bounds
+            Assert.Throws<ArgumentException>( () => a.Slice( 1, 4, 1 ) );  // start out of bounds
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_InvalidLength_ThrowsException()
+        {
+            var a = new Tensor( new[] { 3, 4 } );
+
+            Assert.Throws<ArgumentException>( () => a.Slice( 0, 0, 0 ) );   // zero length
+            Assert.Throws<ArgumentException>( () => a.Slice( 0, 0, -1 ) );  // negative length
+            Assert.Throws<ArgumentException>( () => a.Slice( 0, 0, 4 ) );   // length too large
+            Assert.Throws<ArgumentException>( () => a.Slice( 0, 2, 2 ) );   // start+length exceeds size
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_RequiresGradFalse_NoGradientsComputed()
+        {
+            var a = new Tensor( new[] { 4, 3 } );
+            a.RequiresGrad = false;
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i + 1;
+
+            var slice = a.Slice( 0, 1, 2 );
+
+            Assert.That( slice.RequiresGrad, Is.False );
+
+            slice.Backward();
+
+            // No gradients should accumulate
+            for (int i = 0; i < a.Size; i++)
+                Assert.That( a.Grad[ i ], Is.EqualTo( 0f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_FullDimension_CopiesAll()
+        {
+            var a = new Tensor( new[] { 3, 4 } );
+            for (int i = 0; i < 12; i++)
+                a.Data[ i ] = i + 1;
+
+            // Take all rows
+            var slice = a.Slice( 0, 0, 3 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 3, 4 } ) );
+            for (int i = 0; i < 12; i++)
+                Assert.That( slice.Data[ i ], Is.EqualTo( a.Data[ i ] ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_AlongLastDimension_WorksCorrectly()
+        {
+            var a = new Tensor( new[] { 2, 3, 5 } );
+            for (int i = 0; i < 30; i++)
+                a.Data[ i ] = i + 1;
+
+            // Slice last dimension: take 3 elements starting from index 1
+            var slice = a.Slice( 2, 1, 3 );
+
+            Assert.That( slice.Shape, Is.EqualTo( new[] { 2, 3, 3 } ) );
+            Assert.That( slice.Size, Is.EqualTo( 18 ) );
+
+            // First row, first depth: should skip first element (1) and take 2,3,4
+            Assert.That( slice.Data[ 0 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 1 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( slice.Data[ 2 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void Slice_BatchProcessingUseCase_WorksCorrectly()
+        {
+            // Common use case: processing batches
+            var data = new Tensor( new[] { 10, 5 } ); // 10 samples, 5 features each
+            for (int i = 0; i < 50; i++)
+                data.Data[ i ] = i + 1;
+
+            // Extract batch of 3 samples starting from sample 2
+            var batch = data.Slice( 0, 2, 3 );
+
+            Assert.That( batch.Shape, Is.EqualTo( new[] { 3, 5 } ) );
+
+            // Process batch
+            var processed = batch * 2f;
+            processed.Backward();
+
+            // Gradients only on batch elements
+            for (int i = 0; i < 10; i++)
+                Assert.That( data.Grad[ i ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // rows 0-1
+            for (int i = 10; i < 25; i++)
+                Assert.That( data.Grad[ i ], Is.EqualTo( 2f ).Within( 1e-6 ) ); // rows 2-4 (batch)
+            for (int i = 25; i < 50; i++)
+                Assert.That( data.Grad[ i ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // rows 5-9
+        }
+        //------------------------------------------------------------------
     }
 }

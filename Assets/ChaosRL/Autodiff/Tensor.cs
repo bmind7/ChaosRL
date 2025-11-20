@@ -816,6 +816,77 @@ namespace ChaosRL
         }
         //------------------------------------------------------------------
         /// <summary>
+        /// Extracts a slice along a specific dimension starting from 'start' and taking 'length' elements.
+        /// All other dimensions remain unchanged. Gradients flow back to the original tensor.
+        /// </summary>
+        /// <param name="dim">The dimension to slice along</param>
+        /// <param name="start">Starting index in that dimension</param>
+        /// <param name="length">Number of elements to take from that dimension</param>
+        /// <returns>New tensor with reduced size along the specified dimension</returns>
+        public Tensor Slice( int dim, int start, int length )
+        {
+            int rank = Shape.Length;
+
+            // Support negative indexing
+            if (dim < 0) dim += rank;
+            if (dim < 0 || dim >= rank)
+                throw new ArgumentException(
+                    $"Dimension {dim} out of range for tensor with {rank} dimensions" );
+
+            if (start < 0 || start >= Shape[ dim ])
+                throw new ArgumentException(
+                    $"Start index {start} out of range for dimension {dim} with size {Shape[ dim ]}" );
+
+            if (length <= 0 || start + length > Shape[ dim ])
+                throw new ArgumentException(
+                    $"Length {length} invalid for dimension {dim}: start={start}, size={Shape[ dim ]}" );
+
+            // Build result shape: same as input but with reduced size at 'dim'
+            var resultShape = (int[])Shape.Clone();
+            resultShape[ dim ] = length;
+
+            var result = new Tensor( resultShape, new[] { this }, $"slice(dim={dim},start={start})" );
+
+            // Calculate strides
+            int innerSize = 1;
+            for (int i = dim + 1; i < rank; i++)
+                innerSize *= Shape[ i ];
+
+            int blockSize = Shape[ dim ] * innerSize;
+            int outerSize = Size / blockSize;
+            int sliceBlockSize = length * innerSize;
+
+            // Forward: copy sliced elements
+            for (int outer = 0; outer < outerSize; outer++)
+            {
+                int srcBase = outer * blockSize + start * innerSize;
+                int dstBase = outer * sliceBlockSize;
+
+                for (int i = 0; i < sliceBlockSize; i++)
+                    result.Data[ dstBase + i ] = Data[ srcBase + i ];
+            }
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            // Backward: accumulate gradients back to source positions
+            result._backward = () =>
+            {
+                for (int outer = 0; outer < outerSize; outer++)
+                {
+                    int srcBase = outer * blockSize + start * innerSize;
+                    int dstBase = outer * sliceBlockSize;
+
+                    for (int i = 0; i < sliceBlockSize; i++)
+                        Grad[ srcBase + i ] += result.Grad[ dstBase + i ];
+                }
+            };
+
+            return result;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
         /// Removes dimensions of size 1 (PyTorch: squeeze).
         /// This is a view operation - shares the same Data and Grad arrays.
         /// </summary>
