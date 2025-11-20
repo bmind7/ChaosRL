@@ -24,7 +24,7 @@ namespace ChaosRL
         //------------------------------------------------------------------
         private void CalculateGridSize()
         {
-            _numberOfArenas = Academy.Instance.NumEnvs;
+            _numberOfArenas = AcademyTensor.Instance.NumEnvs;
             // Calculate grid dimensions to fit the number of arenas in a 3D cube
             // Creates as close to a cube shape as possible
             int sideLength = Mathf.CeilToInt( Mathf.Pow( _numberOfArenas, 1f / 3f ) );
