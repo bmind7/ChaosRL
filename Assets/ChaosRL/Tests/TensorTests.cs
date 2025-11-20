@@ -571,11 +571,6 @@ namespace ChaosRL.Tests
         {
             var a = new Tensor( new[] { 2, 3 }, new[] { 2.1f, 0.4f, 4.5f, 4.5f, 5.2f, 6.6f } );
             var normalized = a.Normalize( dim: 1 );
-            UnityEngine.Debug.Log( "Normalized Tensor:" );
-            for (int i = 0; i < normalized.Size; i++)
-            {
-                UnityEngine.Debug.Log( normalized.Data[ i ] );
-            }
             var loss = (normalized * normalized).Sum();
 
             loss.Backward();
