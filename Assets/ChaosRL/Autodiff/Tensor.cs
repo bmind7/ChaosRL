@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 
 namespace ChaosRL
@@ -29,6 +28,7 @@ namespace ChaosRL
             set => Data[ ToFlatIndex( indices ) ] = value;
         }
         //------------------------------------------------------------------
+        // TODO: switch to params int[] for shape to improve usability
         public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
         {
             if (shape == null || shape.Length == 0)
@@ -205,61 +205,6 @@ namespace ChaosRL
         public Tensor Sqrt()
         {
             return Pow( 0.5f );
-        }
-        //------------------------------------------------------------------
-        /// <summary>
-        /// Normalizes the tensor: (x - mean) / sqrt(variance + epsilon)
-        /// Supports normalization over entire tensor (dim=null), first dimension (dim=0), 
-        /// or last dimension (dim=-1 or dim=rank-1).
-        /// </summary>
-        /// <param name="dim">Optional dimension to normalize along. 
-        /// null: normalize entire tensor
-        /// 0: normalize along first dimension (batch normalization style)
-        /// -1 or last: normalize along last dimension (layer normalization style)</param>
-        /// <param name="epsilon">Small value to prevent division by zero (default 1e-5)</param>
-        /// <returns>Normalized tensor</returns>
-        public Tensor Normalize( int? dim = null, float epsilon = 1e-5f )
-        {
-            if (!dim.HasValue)
-            {
-                // Normalize entire tensor
-                var mean = Mean();
-                var centered = this - mean;
-                var variance = (centered * centered).Mean();
-                var std = (variance + epsilon).Sqrt();
-                return centered / std;
-            }
-
-            int rank = Shape.Length;
-            int actualDim = dim.Value;
-            if (actualDim < 0) actualDim += rank;
-
-            // Only support dim=0 or dim=last
-            if (actualDim != 0 && actualDim != rank - 1)
-                throw new ArgumentException(
-                    $"Normalize only supports dim=null (all), dim=0 (first), or dim={rank - 1} (last). Got dim={dim.Value}" );
-
-            if (actualDim == 0)
-            {
-                // Normalize along first dimension (batch norm style)
-                var mean = Mean( 0 );
-                var centered = this - mean;
-                var variance = (centered * centered).Mean( 0 );
-                var std = (variance + epsilon).Sqrt();
-                return centered / std;
-            }
-            else
-            {
-                // Normalize along last dimension (layer norm style)
-                // Use ExpandLast to match dimensions for broadcasting
-                var mean = Mean( rank - 1 );
-                var meanExpanded = mean.ExpandLast( Shape[ rank - 1 ] );
-                var centered = this - meanExpanded;
-                var variance = (centered * centered).Mean( rank - 1 );
-                var varianceExpanded = variance.ExpandLast( Shape[ rank - 1 ] );
-                var std = (varianceExpanded + epsilon).Sqrt();
-                return centered / std;
-            }
         }
         //------------------------------------------------------------------
         public Tensor Exp()
@@ -557,15 +502,15 @@ namespace ChaosRL
 
             int dimSize = Shape[ dim ];
 
-            // innerSize = product of sizes after "dim"
+            // product of sizes after "dim"
             int innerSize = 1;
             for (int i = dim + 1; i < rank; i++)
                 innerSize *= Shape[ i ];
 
-            // blockSize = dimSize * innerSize = number of elements in one [dim, inner] block
+            // number of elements in one [dim, inner] block
             int blockSize = dimSize * innerSize;
 
-            // outerSize = how many such blocks we have (product of sizes before "dim")
+            // how many such blocks we have (product of sizes before "dim")
             int outerSize = Size / blockSize;
 
             // Forward: for each (outer, inner) sum over dim
@@ -636,6 +581,61 @@ namespace ChaosRL
             var sum = Sum( dim );
             var dimSize = Shape[ dim ];
             return sum / (float)dimSize;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Normalizes the tensor: (x - mean) / sqrt(variance + epsilon)
+        /// Supports normalization over entire tensor (dim=null), first dimension (dim=0), 
+        /// or last dimension (dim=-1 or dim=rank-1).
+        /// </summary>
+        /// <param name="dim">Optional dimension to normalize along. 
+        /// null: normalize entire tensor
+        /// 0: normalize along first dimension (batch normalization style)
+        /// -1 or last: normalize along last dimension (layer normalization style)</param>
+        /// <param name="epsilon">Small value to prevent division by zero (default 1e-5)</param>
+        /// <returns>Normalized tensor</returns>
+        public Tensor Normalize( int? dim = null, float epsilon = 1e-5f )
+        {
+            if (!dim.HasValue)
+            {
+                // Normalize entire tensor
+                var mean = Mean();
+                var centered = this - mean;
+                var variance = (centered * centered).Mean();
+                var std = (variance + epsilon).Sqrt();
+                return centered / std;
+            }
+
+            int rank = Shape.Length;
+            int actualDim = dim.Value;
+            if (actualDim < 0) actualDim += rank;
+
+            // Only support dim=0 or dim=last
+            if (actualDim != 0 && actualDim != rank - 1)
+                throw new ArgumentException(
+                    $"Normalize only supports dim=null (all), dim=0 (first), or dim={rank - 1} (last). Got dim={dim.Value}" );
+
+            if (actualDim == 0)
+            {
+                // Normalize along first dimension (batch norm style)
+                var mean = Mean( 0 );
+                var centered = this - mean;
+                var variance = (centered * centered).Mean( 0 );
+                var std = (variance + epsilon).Sqrt();
+                return centered / std;
+            }
+            else
+            {
+                // Normalize along last dimension (layer norm style)
+                // Use ExpandLast to match dimensions for broadcasting
+                var mean = Mean( rank - 1 );
+                var meanExpanded = mean.ExpandLast( Shape[ rank - 1 ] );
+                var centered = this - meanExpanded;
+                var variance = (centered * centered).Mean( rank - 1 );
+                var varianceExpanded = variance.ExpandLast( Shape[ rank - 1 ] );
+                var std = (varianceExpanded + epsilon).Sqrt();
+                return centered / std;
+            }
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -751,77 +751,6 @@ namespace ChaosRL
             return result;
         }
         //------------------------------------------------------------------
-        public void Backward()
-        {
-            var topo = new List<Tensor>();
-            var visited = new HashSet<Tensor>();
-
-            void BuildTopo( Tensor t )
-            {
-                if (visited.Contains( t ))
-                    return;
-
-                visited.Add( t );
-                foreach (var child in t.Children)
-                    BuildTopo( child );
-                topo.Add( t );
-            }
-
-            BuildTopo( this );
-
-            Array.Fill( Grad, 1f );
-
-            topo.Reverse();
-            foreach (var t in topo)
-                t._backward?.Invoke();
-        }
-        //------------------------------------------------------------------
-        public void ZeroGrad()
-        {
-            Array.Clear( Grad, 0, Grad.Length );
-        }
-        //------------------------------------------------------------------
-        private static bool CanBroadcastModulo( Tensor a, Tensor b )
-        {
-            int sizeA = a.Size;
-            int sizeB = b.Size;
-
-            // 1) Both scalars or equal sizes always OK
-            if (sizeA == sizeB)
-                return true;
-
-            // 2) One is scalar
-            if (sizeA == 1 || sizeB == 1)
-                return true;
-
-            // 3) Larger must be clean multiple of smaller
-            int bigger = Math.Max( sizeA, sizeB );
-            int smaller = Math.Min( sizeA, sizeB );
-
-            if (bigger % smaller != 0)
-                return false;
-
-            // 4) Enforce that one is 1D or classic bias pattern
-            //    This stops invalid multi-dimensional flattening patterns.
-            if (a.Shape.Length > 1 && b.Shape.Length > 1)
-            {
-                // Only allow classic bias: [M,N] + [N]
-                // Check if one shape is suffix of the other
-                int[] shorter = a.Shape.Length < b.Shape.Length ? a.Shape : b.Shape;
-                int[] longer = a.Shape.Length < b.Shape.Length ? b.Shape : a.Shape;
-
-                // Check if shorter matches end of longer
-                int offset = longer.Length - shorter.Length;
-                for (int i = 0; i < shorter.Length; i++)
-                {
-                    if (shorter[ i ] != longer[ offset + i ])
-                        return false;
-                }
-            }
-
-            return true;
-        }
-        //------------------------------------------------------------------
         /// <summary>
         /// Adds a dimension of size 1 at the specified position (PyTorch: unsqueeze).
         /// This is a view operation - shares the same Data and Grad arrays.
@@ -853,77 +782,6 @@ namespace ChaosRL
             result.RequiresGrad = this.RequiresGrad;
 
             // No _backward needed - gradients are shared via the same array reference
-
-            return result;
-        }
-        //------------------------------------------------------------------
-        /// <summary>
-        /// Extracts a slice along a specific dimension starting from 'start' and taking 'length' elements.
-        /// All other dimensions remain unchanged. Gradients flow back to the original tensor.
-        /// </summary>
-        /// <param name="dim">The dimension to slice along</param>
-        /// <param name="start">Starting index in that dimension</param>
-        /// <param name="length">Number of elements to take from that dimension</param>
-        /// <returns>New tensor with reduced size along the specified dimension</returns>
-        public Tensor Slice( int dim, int start, int length )
-        {
-            int rank = Shape.Length;
-
-            // Support negative indexing
-            if (dim < 0) dim += rank;
-            if (dim < 0 || dim >= rank)
-                throw new ArgumentException(
-                    $"Dimension {dim} out of range for tensor with {rank} dimensions" );
-
-            if (start < 0 || start >= Shape[ dim ])
-                throw new ArgumentException(
-                    $"Start index {start} out of range for dimension {dim} with size {Shape[ dim ]}" );
-
-            if (length <= 0 || start + length > Shape[ dim ])
-                throw new ArgumentException(
-                    $"Length {length} invalid for dimension {dim}: start={start}, size={Shape[ dim ]}" );
-
-            // Build result shape: same as input but with reduced size at 'dim'
-            var resultShape = (int[])Shape.Clone();
-            resultShape[ dim ] = length;
-
-            var result = new Tensor( resultShape, new[] { this }, $"slice(dim={dim},start={start})" );
-
-            // Calculate strides
-            int innerSize = 1;
-            for (int i = dim + 1; i < rank; i++)
-                innerSize *= Shape[ i ];
-
-            int blockSize = Shape[ dim ] * innerSize;
-            int outerSize = Size / blockSize;
-            int sliceBlockSize = length * innerSize;
-
-            // Forward: copy sliced elements
-            for (int outer = 0; outer < outerSize; outer++)
-            {
-                int srcBase = outer * blockSize + start * innerSize;
-                int dstBase = outer * sliceBlockSize;
-
-                for (int i = 0; i < sliceBlockSize; i++)
-                    result.Data[ dstBase + i ] = Data[ srcBase + i ];
-            }
-
-            result.RequiresGrad = this.RequiresGrad;
-            if (result.RequiresGrad == false)
-                return result;
-
-            // Backward: accumulate gradients back to source positions
-            result._backward = () =>
-            {
-                for (int outer = 0; outer < outerSize; outer++)
-                {
-                    int srcBase = outer * blockSize + start * innerSize;
-                    int dstBase = outer * sliceBlockSize;
-
-                    for (int i = 0; i < sliceBlockSize; i++)
-                        Grad[ srcBase + i ] += result.Grad[ dstBase + i ];
-                }
-            };
 
             return result;
         }
@@ -995,6 +853,77 @@ namespace ChaosRL
 
                 return result;
             }
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Extracts a slice along a specific dimension starting from 'start' and taking 'length' elements.
+        /// All other dimensions remain unchanged. Gradients flow back to the original tensor.
+        /// </summary>
+        /// <param name="dim">The dimension to slice along</param>
+        /// <param name="start">Starting index in that dimension</param>
+        /// <param name="length">Number of elements to take from that dimension</param>
+        /// <returns>New tensor with reduced size along the specified dimension</returns>
+        public Tensor Slice( int dim, int start, int length )
+        {
+            int rank = Shape.Length;
+
+            // Support negative indexing
+            if (dim < 0) dim += rank;
+            if (dim < 0 || dim >= rank)
+                throw new ArgumentException(
+                    $"Dimension {dim} out of range for tensor with {rank} dimensions" );
+
+            if (start < 0 || start >= Shape[ dim ])
+                throw new ArgumentException(
+                    $"Start index {start} out of range for dimension {dim} with size {Shape[ dim ]}" );
+
+            if (length <= 0 || start + length > Shape[ dim ])
+                throw new ArgumentException(
+                    $"Length {length} invalid for dimension {dim}: start={start}, size={Shape[ dim ]}" );
+
+            // Build result shape: same as input but with reduced size at 'dim'
+            var resultShape = (int[])Shape.Clone();
+            resultShape[ dim ] = length;
+
+            var result = new Tensor( resultShape, new[] { this }, $"slice(dim={dim},start={start})" );
+
+            // Calculate strides
+            int innerSize = 1;
+            for (int i = dim + 1; i < rank; i++)
+                innerSize *= Shape[ i ];
+
+            int blockSize = Shape[ dim ] * innerSize;
+            int outerSize = Size / blockSize;
+            int sliceBlockSize = length * innerSize;
+
+            // Forward: copy sliced elements
+            for (int outer = 0; outer < outerSize; outer++)
+            {
+                int srcBase = outer * blockSize + start * innerSize;
+                int dstBase = outer * sliceBlockSize;
+
+                for (int i = 0; i < sliceBlockSize; i++)
+                    result.Data[ dstBase + i ] = Data[ srcBase + i ];
+            }
+
+            result.RequiresGrad = this.RequiresGrad;
+            if (result.RequiresGrad == false)
+                return result;
+
+            // Backward: accumulate gradients back to source positions
+            result._backward = () =>
+            {
+                for (int outer = 0; outer < outerSize; outer++)
+                {
+                    int srcBase = outer * blockSize + start * innerSize;
+                    int dstBase = outer * sliceBlockSize;
+
+                    for (int i = 0; i < sliceBlockSize; i++)
+                        Grad[ srcBase + i ] += result.Grad[ dstBase + i ];
+                }
+            };
+
+            return result;
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -1080,6 +1009,48 @@ namespace ChaosRL
             return result;
         }
         //------------------------------------------------------------------
+        private static bool CanBroadcastModulo( Tensor a, Tensor b )
+        {
+            int sizeA = a.Size;
+            int sizeB = b.Size;
+
+            // TODO: fix issue when (2,3) + (3,2) incorrectly allowed
+            // 1) Both scalars or equal sizes always OK
+            if (sizeA == sizeB)
+                return true;
+
+            // 2) One is scalar
+            if (sizeA == 1 || sizeB == 1)
+                return true;
+
+            // 3) Larger must be clean multiple of smaller
+            int bigger = Math.Max( sizeA, sizeB );
+            int smaller = Math.Min( sizeA, sizeB );
+
+            if (bigger % smaller != 0)
+                return false;
+
+            // 4) Enforce that one is 1D or classic bias pattern
+            //    This stops invalid multi-dimensional flattening patterns.
+            if (a.Shape.Length > 1 && b.Shape.Length > 1)
+            {
+                // Only allow classic bias: [M,N] + [N]
+                // Check if one shape is suffix of the other
+                int[] shorter = a.Shape.Length < b.Shape.Length ? a.Shape : b.Shape;
+                int[] longer = a.Shape.Length < b.Shape.Length ? b.Shape : a.Shape;
+
+                // Check if shorter matches end of longer
+                int offset = longer.Length - shorter.Length;
+                for (int i = 0; i < shorter.Length; i++)
+                {
+                    if (shorter[ i ] != longer[ offset + i ])
+                        return false;
+                }
+            }
+
+            return true;
+        }
+        //------------------------------------------------------------------
         public int ToFlatIndex( int[] indices )
         {
             if (indices == null || indices.Length != Shape.Length)
@@ -1101,6 +1072,36 @@ namespace ChaosRL
             }
 
             return flatIndex;
+        }
+        //------------------------------------------------------------------
+        public void Backward()
+        {
+            var topo = new List<Tensor>();
+            var visited = new HashSet<Tensor>();
+
+            void BuildTopo( Tensor t )
+            {
+                if (visited.Contains( t ))
+                    return;
+
+                visited.Add( t );
+                foreach (var child in t.Children)
+                    BuildTopo( child );
+                topo.Add( t );
+            }
+
+            BuildTopo( this );
+
+            Array.Fill( Grad, 1f );
+
+            topo.Reverse();
+            foreach (var t in topo)
+                t._backward?.Invoke();
+        }
+        //------------------------------------------------------------------
+        public void ZeroGrad()
+        {
+            Array.Clear( Grad, 0, Grad.Length );
         }
         //------------------------------------------------------------------
         public override string ToString()

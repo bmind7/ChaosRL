@@ -527,12 +527,6 @@ namespace ChaosRL.Tests
 
             Assert.That( normalized.Shape, Is.EqualTo( new[] { 2, 3 } ) );
 
-            UnityEngine.Debug.Log( "Normalized Tensor:" );
-            for (int i = 0; i < normalized.Size; i++)
-            {
-                UnityEngine.Debug.Log( normalized.Data[ i ] );
-            }
-
             // Each row should have mean ~0 and variance ~1
             // Row 0: [1, 2, 3] -> normalized
             var row0Mean = (normalized.Data[ 0 ] + normalized.Data[ 1 ] + normalized.Data[ 2 ]) / 3f;
