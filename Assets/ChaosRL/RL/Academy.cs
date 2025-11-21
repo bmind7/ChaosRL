@@ -1,6 +1,4 @@
-using System;
 using System.Linq;
-using System.Runtime.InteropServices;
 
 using UnityEngine;
 
@@ -45,19 +43,12 @@ namespace ChaosRL
         private int _bufferSize;
         private int _currentStep = 0;
         private int _bufferIdx = 0;
-        private float[,,] _observationBuffer;
-        private float[,] _valBuffer;
-        private float[,,] _actionBuffer;
-        private float[,] _logProbBuffer;
-        private float[,] _doneBuffer;
-        private float[,] _rewardBuffer;
-
-        // --- Temporary arrays to avoid repeated allocations during Network Update---
-        private Value[] _pgLoss;
-        private Value[] _entropyLoss;
-        private Value[] _valueLoss;
-        private Value[] _obsArray;
-        private Dist[] _distArray;
+        private Tensor _observationBuffer;
+        private Tensor _valBuffer;
+        private Tensor _actionBuffer;
+        private Tensor _logProbBuffer;
+        private Tensor _doneBuffer;
+        private Tensor _rewardBuffer;
         //------------------------------------------------------------------
         private void Awake()
         {
@@ -84,7 +75,6 @@ namespace ChaosRL
             // --- Value network predicts a single scalar state value
             layerSizes = _hiddenLayers.Append( 1 ).ToArray();
             _valueNetwork = new MLP( _inputSize, layerSizes );
-
             _optimizer = new AdamOptimizer( new[]
                 {
                     _policyNetwork.Parameters,
@@ -97,64 +87,52 @@ namespace ChaosRL
                     _valueNetwork.Parameters,
                 } );
 
-
             // --- Experience Replay Buffers ---
             _bufferSize = (_approxBufferSize / _numEnvs);
-            _observationBuffer = new float[ _bufferSize, _numEnvs, _inputSize ];
-            _valBuffer = new float[ _bufferSize, _numEnvs ];
-            _actionBuffer = new float[ _bufferSize, _numEnvs, _actionSize ];
-            _logProbBuffer = new float[ _bufferSize, _numEnvs ];
-            _doneBuffer = new float[ _bufferSize, _numEnvs ];
-            _rewardBuffer = new float[ _bufferSize, _numEnvs ];
 
-            // --- Network update temporary arrays ---
-            int trimmedBatchSize = Math.Max( 1, _bufferSize - 1 );
-            int totalElements = trimmedBatchSize * _numEnvs;
-
-            _pgLoss = new Value[ totalElements ];
-            _entropyLoss = new Value[ totalElements ];
-            _valueLoss = new Value[ totalElements ];
-
-            _obsArray = new Value[ _inputSize ];
-            _distArray = new Dist[ _actionSize ];
+            _observationBuffer = new Tensor( new[] { _bufferSize, _numEnvs, _inputSize }, requiresGrad: false );
+            _valBuffer = new Tensor( new[] { _bufferSize, _numEnvs }, requiresGrad: false );
+            _actionBuffer = new Tensor( new[] { _bufferSize, _numEnvs, _actionSize }, requiresGrad: false );
+            _logProbBuffer = new Tensor( new[] { _bufferSize, _numEnvs }, requiresGrad: false );
+            _doneBuffer = new Tensor( new[] { _bufferSize, _numEnvs }, requiresGrad: false );
+            _rewardBuffer = new Tensor( new[] { _bufferSize, _numEnvs }, requiresGrad: false );
         }
         //------------------------------------------------------------------
         public float[] RequestDecision( int agentIdx, float[] observation, bool done, float reward )
         {
-            var obs = observation.ToValues();
+            var obs = new Tensor( new[] { 1, observation.Length }, observation, requiresGrad: false );
             var policyOutput = _policyNetwork.Forward( obs );
             var val = _valueNetwork.Forward( obs );
             var outputActions = new float[ _actionSize ];
 
-            // Avoids invinite accumulation of log-probs over time
-            _logProbBuffer[ _bufferIdx, agentIdx ] = 0f;
             // Sample Action Policy (Gaussian policy): 
             // mean from first half, log-std from second half of network output
+
+            var mean = policyOutput.Slice( 1, 0, _actionSize );
+            var logStd = policyOutput.Slice( 1, _actionSize, _actionSize );
+            var std = (logStd + _logStdOffset).Exp();
+            var dist = new Dist( mean, std );
+            var action = dist.Sample();
+
+            // Clipped action only send to environment
             for (int i = 0; i < _actionSize; i++)
             {
-                // Offset added to log-std to output to avoid too high std values
-                var logStd = policyOutput[ _actionSize + i ] + _logStdOffset;
-                var std = logStd.Exp();
-                var dist = new Dist( policyOutput[ i ], std );
-                var action = dist.Sample();
-                // Clipped action only send to environment
-                float clipped = Mathf.Clamp( action.Data, -1f, 1f );
-                outputActions[ i ] = clipped;
-                // Stored sampled action for later use in PPO update
-                _actionBuffer[ _bufferIdx, agentIdx, i ] = action.Data;
-                // Store log-prob of sampled action so PPO can later compare new vs old policy
-                _logProbBuffer[ _bufferIdx, agentIdx ] += dist.LogProb( action.Data ).Data;
+                // always take first raw because batch size is 1
+                outputActions[ i ] = Mathf.Clamp( action[ 0, i ], -1f, 1f );
+                _actionBuffer[ _bufferIdx, agentIdx, i ] = action[ 0, i ];
             }
+
+            _logProbBuffer[ _bufferIdx, agentIdx ] = dist.LogProb( action ).Sum().Data[ 0 ];
 
             for (int i = 0; i < _inputSize; i++)
                 _observationBuffer[ _bufferIdx, agentIdx, i ] = observation[ i ];
 
-            _valBuffer[ _bufferIdx, agentIdx ] = val[ 0 ].Data;
+            _valBuffer[ _bufferIdx, agentIdx ] = val[ 0, 0 ];
             _doneBuffer[ _bufferIdx, agentIdx ] = done ? 1f : 0f;
             _rewardBuffer[ _bufferIdx, agentIdx ] = reward;
 
 
-            // Update networks if buffer is full or step limit reached
+            // Update networks if buffer is full and all envs have stepped
             if (_bufferIdx == _bufferSize - 1 && _currentStep % _numEnvs == _numEnvs - 1)
                 UpdateNetworks();
 
@@ -165,13 +143,13 @@ namespace ChaosRL
             return outputActions;
         }
         //------------------------------------------------------------------
-        public (float[,] advantages, float[,] returns) ComputeGAE()
+        public (Tensor advantages, Tensor returns) ComputeGAE()
         {
             int T = _bufferSize;    // time steps per env
             int N = _numEnvs;       // number of envs
 
-            var advantages = new float[ T, N ];
-            var returns = new float[ T, N ];
+            var advantages = new Tensor( new[] { T, N }, requiresGrad: false );
+            var returns = new Tensor( new[] { T, N }, requiresGrad: false );
 
             // Maintain separate GAE accumulators per environment to avoid mixing signals between envs
             for (int env = 0; env < N; env++)
@@ -201,26 +179,28 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public void UpdateNetworks()
         {
-            (float[,] advantages, float[,] returns) = ComputeGAE();
+            (Tensor advantages, Tensor returns) = ComputeGAE();
 
             // Excluding the last row from experience buffer (which is only used for bootstrapping)
             int trimBatchSize = _bufferSize - 1;
             int totalElements = trimBatchSize * _numEnvs;
 
-            // Flattened views over the buffers for easier minibatch sampling
-            Span<float> batch_observations = MemoryMarshal.CreateSpan( ref _observationBuffer[ 0, 0, 0 ], totalElements * _inputSize );
-            Span<float> batch_actions = MemoryMarshal.CreateSpan( ref _actionBuffer[ 0, 0, 0 ], totalElements * _actionSize );
-            Span<float> batch_log_probs = MemoryMarshal.CreateSpan( ref _logProbBuffer[ 0, 0 ], totalElements );
-            Span<float> batch_advantages = MemoryMarshal.CreateSpan( ref advantages[ 0, 0 ], totalElements );
-            Span<float> batch_returns = MemoryMarshal.CreateSpan( ref returns[ 0, 0 ], totalElements );
-            Span<float> doneFlags = MemoryMarshal.CreateSpan( ref _doneBuffer[ 0, 0 ], totalElements );
+            // Flatten time and env dimensions for minibatch sampling (just slice - data already contiguous)
+            var batch_observations = _observationBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, _inputSize } );
+            var batch_actions = _actionBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, _actionSize } );
+            var batch_log_probs = _logProbBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
+            var batch_advantages = advantages.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
+            var batch_returns = returns.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
+            var batch_doneFlags = _doneBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
 
-            // Normalize advantages to keep the policy gradient scale well behaved
-            batch_advantages = Utils.Normalize( batch_advantages );
+            // // Normalize advantages to keep the policy gradient scale well behaved
+            batch_advantages = batch_advantages.Normalize().Reshape( new[] { totalElements, 1 } );
 
             int[] indices = Enumerable.Range( 0, totalElements ).ToArray();
 
-            float averageLoss = 0f;
+            float averageLoss = 0f, totalPgLossSum = 0f, totalEntropyLossSum = 0f, totalValueLossSum = 0f;
+            int batchCount = 0;
+
             for (int epoch = 0; epoch < _updateEpochs; epoch++)
             {
                 // Make sure we sample random indices for each epoch
@@ -228,54 +208,53 @@ namespace ChaosRL
 
                 for (int start = 0; start < totalElements; start += _minibatchSize)
                 {
-                    // Avoid overflow on last minibatch
-                    int end = Math.Min( start + _minibatchSize, totalElements );
-                    int mbSize = end - start;
+                    // Extract minibatch using helper
+                    var mb_observations = Utils.GetMinibatch( batch_observations, indices, start, _minibatchSize );
+                    var mb_actions = Utils.GetMinibatch( batch_actions, indices, start, _minibatchSize );
+                    var mb_log_probs = Utils.GetMinibatch( batch_log_probs, indices, start, _minibatchSize );
+                    var mb_advantages = Utils.GetMinibatch( batch_advantages, indices, start, _minibatchSize );
+                    var mb_returns = Utils.GetMinibatch( batch_returns, indices, start, _minibatchSize );
 
-                    for (int mbIdx = start; mbIdx < end; mbIdx++)
-                    {
-                        int idx = indices[ mbIdx ];
+                    // Forward pass through networks for entire minibatch
+                    var mb_policyOutput = _policyNetwork.Forward( mb_observations );
+                    var mb_values = _valueNetwork.Forward( mb_observations );
 
-                        for (int i = 0; i < _inputSize; i++)
-                            _obsArray[ i ] = new Value( batch_observations[ idx * _inputSize + i ] );
-                        var policyOutput = _policyNetwork.Forward( _obsArray );
-                        var val = _valueNetwork.Forward( _obsArray );
+                    // Extract mean and log-std from policy output
+                    var mb_mean = mb_policyOutput.Slice( 1, 0, _actionSize );
+                    var mb_logStd = mb_policyOutput.Slice( 1, _actionSize, _actionSize );
+                    var mb_std = (mb_logStd + _logStdOffset).Exp();
 
-                        // Squared error between predicted value and simulated return
-                        _valueLoss[ mbIdx ] = 0.5f * (val[ 0 ] - new Value( batch_returns[ idx ] )).Pow( 2 );
+                    // Create distribution and compute log probabilities
+                    var mb_dist = new Dist( mb_mean, mb_std );
+                    var mb_newLogProbs = mb_dist.LogProb( mb_actions ).Sum( 1 );
+                    var mb_entropy = mb_dist.Entropy().Mean( 1 );
 
-                        // Calculate log-prob and entropy under current policy and based on stored actions
-                        Value entropySum = 0;
-                        Value newLogProb = 0;
-                        for (int i = 0; i < _actionSize; i++)
-                        {
-                            var logStd = policyOutput[ _actionSize + i ] + _logStdOffset;
-                            var std = logStd.Exp();
-                            _distArray[ i ] = new Dist( policyOutput[ i ], std );
-                            newLogProb += _distArray[ i ].LogProb( batch_actions[ idx * _actionSize + i ] );
-                            entropySum += _distArray[ i ].Entropy();
-                        }
+                    // Importance sampling ratio
+                    var mb_ratio = (mb_newLogProbs - mb_log_probs).Exp();
 
-                        // Importance sampling ratio between new and old policy
-                        var ratio = (newLogProb - batch_log_probs[ idx ]).Exp();
-                        // Unclipped and clipped objectives from PPO
-                        var pgLoss1 = -batch_advantages[ idx ] * ratio;
-                        var pgLoss2 = -batch_advantages[ idx ] * ratio.Clamp( 1f - _clipCoef, 1f + _clipCoef );
-                        _pgLoss[ mbIdx ] = Value.Max( pgLoss1, pgLoss2 );
+                    // PPO clipped objective
+                    var mb_pgLoss1 = -mb_advantages * mb_ratio;
+                    var mb_pgLoss2 = -mb_advantages * mb_ratio.Clamp( 1f - _clipCoef, 1f + _clipCoef );
+                    var mb_pgLoss = Tensor.Max( mb_pgLoss1, mb_pgLoss2 );
 
-                        // Encourage exploration by maximizing entropy of the policy distribution
-                        _entropyLoss[ mbIdx ] = entropySum / _actionSize;
-                    }
+                    // Value loss
+                    var mb_valueLoss = ((mb_values - mb_returns).Pow( 2 )) * 0.5f;
 
-                    var totalPgLoss = Utils.Mean( _pgLoss.AsSpan( start, mbSize ) );
-                    var totalEntropyLoss = Utils.Mean( _entropyLoss.AsSpan( start, mbSize ) );
-                    var totalValueLoss = Utils.Mean( _valueLoss.AsSpan( start, mbSize ) );
+                    // Compute mean losses
+                    var totalPgLoss = mb_pgLoss.Mean();
+                    var totalEntropyLoss = mb_entropy.Mean();
+                    var totalValueLoss = mb_valueLoss.Mean();
+                    var l2Penalty = _l2Regularizer.Compute( _l2Coef );
 
-                    Value l2Penalty = _l2Regularizer.Compute( _l2Coef );
+                    // Accumulate loss statistics
+                    totalPgLossSum += totalPgLoss.Data[ 0 ];
+                    totalEntropyLossSum += totalEntropyLoss.Data[ 0 ];
+                    totalValueLossSum += totalValueLoss.Data[ 0 ];
+                    batchCount++;
 
                     // Standard PPO loss: policy term + value term + entropy bonus + weight decay
                     var totalLoss = totalPgLoss - _betaCoef * totalEntropyLoss + _vCoef * totalValueLoss + l2Penalty;
-                    averageLoss += totalLoss.Data;
+                    averageLoss += totalLoss.Data[ 0 ];
 
                     _policyNetwork.ZeroGrad();
                     _valueNetwork.ZeroGrad();
@@ -285,14 +264,13 @@ namespace ChaosRL
                     _optimizer.Step( _learningRate );
                 }
             }
-            averageLoss /= (_updateEpochs * (totalElements / (float)_minibatchSize));
+            averageLoss /= batchCount;
+            float meanPgLoss = totalPgLossSum / batchCount;
+            float meanEntropyLoss = totalEntropyLossSum / batchCount;
+            float meanValueLoss = totalValueLossSum / batchCount;
 
-            var meanPgLossValue = Utils.Mean( _pgLoss );
-            var meanEntropyLossValue = Utils.Mean( _entropyLoss );
-            var meanValueLossValue = Utils.Mean( _valueLoss );
-
-            float meanReturn = Utils.MeanReturn( batch_returns, doneFlags, _numEnvs );
-            Debug.Log( $"Step count: {_currentStep}, Mean Return: {meanReturn}, Average Loss: {averageLoss}, PG Loss: {meanPgLossValue.Data}, Entropy Loss: {meanEntropyLossValue.Data}, Value Loss: {meanValueLossValue.Data}" );
+            float meanReturn = batch_returns.Sum().Data[ 0 ] / batch_doneFlags.Sum().Data[ 0 ] / _numEnvs;
+            Debug.Log( $"Step count: {_currentStep}, Mean Return: {meanReturn}, Average Loss: {averageLoss}, PG Loss: {meanPgLoss}, Entropy Loss: {meanEntropyLoss}, Value Loss: {meanValueLoss}" );
         }
         //------------------------------------------------------------------
     }

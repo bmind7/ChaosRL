@@ -11,10 +11,9 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 
 ### ✨ What’s inside
 - Simple **continuous control task** – tilt a panel to keep a ball centered  
-- **Autodiff engine** (scalar-based, dynamic graph)  
+- **Autodiff engine** (scalar-based, tensor-based, dynamic graph)  
 - **PPO** implementation with entropy bonus, value function, clipping, etc.  
 - All code runs in **Unity / C#**, single-threaded  
-- Focused on clarity rather than performance
 
 ---
 
@@ -30,13 +29,29 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 
 ---
 
-### 🧠 Future plans
-- Tensor backend with **vectorized ops (CPU)**
+### 💻 Code to look at
+- **Value.cs** simple implementation of AutoDiff, easy to understand 
+- **Tensor.cs** data oriented implementation of AutoDiff
+- **Academy.cs** PPO implementation
+
+---
+
+### 🧠 Roadmap
+- ~~Tensor class with better data layout~~ (**200x-400x** speed up of MatMul)
+- Backend with **vectorized ops (CPU)**
 - **Multithreading** support for simulation and training
 - **Compute shader** backend (GPU)
 - Core plumbing: Agents, Academy, Save/Load, Configs, Telemetry
 
 ---
 
+### ❓Current issues 
+- Performance on CPU is still way behind libs like PyTorch
+- Broadcasting is very limited for now and supports only shape mismatch. For example, **Add** two tensors (2, 5, 10) and (5,10) will work, because the tail of the shape is identical. Operations on scalars tensors also will work because scalar has shape (1) which can match anything.
+- Because of limited broadcasting **Normalize()** method will work only on whole tensor, dim=0 or dim=last_dimention 
+- **ExpandLast** works only for last dim. I need to add general **Expand** then **Normalize** in any dimension will be easy
+
+---
+
 ### 💡 Notes
-This isn’t meant to be fast or production-ready yet — it’s a learning playground to understand how PPO and autodiff actually work under the hood.
+This is not a production ready code. It’s a learning playground to understand how PPO and autodiff actually work under the hood. 
