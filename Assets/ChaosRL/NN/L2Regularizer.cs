@@ -30,7 +30,7 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public Tensor Compute( float coefficient, float scale = 0.5f )
         {
-            if (coefficient <= 0f)
+            if (coefficient <= 0f || scale <= 0f)
                 return new Tensor( 0f );
 
             Tensor total = new Tensor( 0f );

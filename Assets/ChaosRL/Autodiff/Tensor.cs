@@ -781,18 +781,6 @@ namespace ChaosRL
             Array.Clear( Grad, 0, Grad.Length );
         }
         //------------------------------------------------------------------
-        private static bool ShapesMatch( int[] shape1, int[] shape2 )
-        {
-            if (shape1.Length != shape2.Length)
-                return false;
-
-            for (int i = 0; i < shape1.Length; i++)
-                if (shape1[ i ] != shape2[ i ])
-                    return false;
-
-            return true;
-        }
-        //------------------------------------------------------------------
         private static bool CanBroadcastModulo( Tensor a, Tensor b )
         {
             int sizeA = a.Size;
@@ -863,14 +851,8 @@ namespace ChaosRL
             result.Data = this.Data; // Share data array
             result.Grad = this.Grad; // Share grad array
             result.RequiresGrad = this.RequiresGrad;
-            if (result.RequiresGrad == false)
-                return result;
 
-            result._backward = () =>
-            {
-                // Gradients already shared, nothing to do
-                // The parent's grad array is the same as result's grad array
-            };
+            // No _backward needed - gradients are shared via the same array reference
 
             return result;
         }
@@ -985,13 +967,8 @@ namespace ChaosRL
                 result.Data = this.Data; // Share data array
                 result.Grad = this.Grad; // Share grad array
                 result.RequiresGrad = this.RequiresGrad;
-                if (result.RequiresGrad == false)
-                    return result;
 
-                result._backward = () =>
-                {
-                    // Gradients already shared, nothing to do
-                };
+                // No _backward needed - gradients are shared via the same array reference
 
                 return result;
             }
@@ -1013,13 +990,8 @@ namespace ChaosRL
                 result.Data = this.Data; // Share data array
                 result.Grad = this.Grad; // Share grad array
                 result.RequiresGrad = this.RequiresGrad;
-                if (result.RequiresGrad == false)
-                    return result;
 
-                result._backward = () =>
-                {
-                    // Gradients already shared, nothing to do
-                };
+                // No _backward needed - gradients are shared via the same array reference
 
                 return result;
             }
@@ -1042,7 +1014,6 @@ namespace ChaosRL
                 newShape[ i ] = Shape[ i ];
             newShape[ Shape.Length ] = num;
 
-            int newSize = Size * num;
             var result = new Tensor( newShape, new[] { this }, $"expandLast({num})" );
 
             // Forward pass: replicate each element num times
@@ -1104,16 +1075,12 @@ namespace ChaosRL
             result.Grad = this.Grad; // Share grad array
             result.RequiresGrad = this.RequiresGrad;
 
-            // Backward pass: gradients already shared
-            result._backward = () =>
-            {
-                // Gradients already shared, nothing to do
-            };
+            // No _backward needed - gradients are shared via the same array reference
 
             return result;
         }
         //------------------------------------------------------------------
-        private int ToFlatIndex( int[] indices )
+        public int ToFlatIndex( int[] indices )
         {
             if (indices == null || indices.Length != Shape.Length)
                 throw new ArgumentException(

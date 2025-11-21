@@ -5,7 +5,7 @@ namespace ChaosRL
 {
     /// <summary>
     /// Multi-layer perceptron using Tensor for efficient batch processing.
-    /// Chains multiple LayerTensor instances to create a deep neural network.
+    /// Chains multiple Layer instances to create a deep neural network.
     /// </summary>
     public class MLP
     {

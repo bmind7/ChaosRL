@@ -132,7 +132,7 @@ namespace ChaosRL
             _rewardBuffer[ _bufferIdx, agentIdx ] = reward;
 
 
-            // Update networks if buffer is full or step limit reached
+            // Update networks if buffer is full and all envs have stepped
             if (_bufferIdx == _bufferSize - 1 && _currentStep % _numEnvs == _numEnvs - 1)
                 UpdateNetworks();
 
@@ -238,7 +238,7 @@ namespace ChaosRL
                     var mb_pgLoss = Tensor.Max( mb_pgLoss1, mb_pgLoss2 );
 
                     // Value loss
-                    var mb_valueLoss = ((mb_values.Squeeze() - mb_returns).Pow( 2 )) * 0.5f;
+                    var mb_valueLoss = ((mb_values - mb_returns).Pow( 2 )) * 0.5f;
 
                     // Compute mean losses
                     var totalPgLoss = mb_pgLoss.Mean();

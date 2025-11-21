@@ -1,7 +1,5 @@
 using System;
 
-using UnityEngine;
-
 namespace ChaosRL
 {
     public static class Utils
@@ -46,8 +44,9 @@ namespace ChaosRL
                 for (int i = 0; i < mbSize; i++)
                 {
                     int srcIdx = indices[ start + i ];
-                    for (int j = 0; j < features; j++)
-                        result[ i, j ] = source[ srcIdx, j ];
+                    int srcStart = source.ToFlatIndex( new[] { srcIdx, 0 } );
+                    int dstStart = result.ToFlatIndex( new[] { i, 0 } );
+                    Array.Copy( source.Data, srcStart, result.Data, dstStart, features );
                 }
             }
             else // 1D
@@ -55,7 +54,7 @@ namespace ChaosRL
                 for (int i = 0; i < mbSize; i++)
                 {
                     int srcIdx = indices[ start + i ];
-                    result[ i ] = source[ srcIdx ];
+                    result.Data[ i ] = source.Data[ srcIdx ];
                 }
             }
 
