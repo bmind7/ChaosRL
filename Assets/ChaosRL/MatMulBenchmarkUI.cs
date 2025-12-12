@@ -46,24 +46,34 @@ namespace ChaosRL
         {
             var sb = new StringBuilder();
             sb.AppendLine( $"Benchmark started at {DateTime.Now}" );
-            sb.AppendLine( "--------------------------------------------------" );
+            sb.AppendLine();
 
             // Define sizes to benchmark
             int[] sizes = { 64, 128, 256, 512 };
+
+            sb.AppendLine( "CPU Results (MatMul Only):" );
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
+            sb.AppendLine( new string( '-', 80 ) );
 
             foreach (var size in sizes)
             {
                 RunTensorMatMulOnly( size, size, size, sb );
             }
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine();
 
-            sb.AppendLine( "--------------------------------------------------" );
+            sb.AppendLine( "CPU Results (MatMul + Backward):" );
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
+            sb.AppendLine( new string( '-', 80 ) );
 
             foreach (var size in sizes)
             {
                 RunTensorMatMulWithBackward( size, size, size, sb );
             }
+            sb.AppendLine( new string( '-', 80 ) );
 
-            sb.AppendLine( "--------------------------------------------------" );
             sb.AppendLine( "Done." );
 
             _benchmarkResults = sb.ToString();
@@ -73,8 +83,6 @@ namespace ChaosRL
         {
             const int warmup = 3;
             const int iterations = 10;
-
-            sb.AppendLine( $"Running Tensor MatMul: {M}x{K} @ {K}x{N}..." );
 
             // Pre-allocate and populate tensors once
             var a = new Tensor( new[] { M, K } );
@@ -91,28 +99,34 @@ namespace ChaosRL
             }
 
             // Benchmark MatMul only
-            var sw = Stopwatch.StartNew();
+            double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
+                var sw = Stopwatch.StartNew();
                 _ = a.MatMul( b );
+                sw.Stop();
+                times[ i ] = sw.Elapsed.TotalMilliseconds;
             }
-            sw.Stop();
 
-            var avgTime = sw.Elapsed.TotalMilliseconds / iterations;
+            double avgTime = 0;
+            foreach (var t in times) avgTime += t;
+            avgTime /= iterations;
+
+            double sumSquares = 0;
+            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
+            double stdDev = Math.Sqrt( sumSquares / iterations );
+
             var flops = 2.0 * M * K * N; // multiply-add counts as 2 operations
-            var gflops = (flops * iterations / sw.Elapsed.TotalSeconds) / 1e9;
+            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
 
-            sb.AppendLine( $"  Average time: {avgTime:F3} ms" );
-            sb.AppendLine( $"  Performance: {gflops:F2} GFLOPS" );
-            sb.AppendLine();
+            string sizeStr = $"{M}x{K} @ {K}x{N}";
+            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
 
         private void RunTensorMatMulWithBackward( int M, int K, int N, StringBuilder sb )
         {
             const int warmup = 3;
             const int iterations = 10;
-
-            sb.AppendLine( $"Running Tensor MatMul + Backward: {M}x{K} @ {K}x{N}..." );
 
             // Pre-allocate and populate tensors once
             var a = new Tensor( new[] { M, K } );
@@ -133,25 +147,33 @@ namespace ChaosRL
             }
 
             // Benchmark MatMul + Backward
-            var sw = Stopwatch.StartNew();
+            double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
+                var sw = Stopwatch.StartNew();
                 var result = a.MatMul( b );
                 var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();
+                sw.Stop();
+                times[ i ] = sw.Elapsed.TotalMilliseconds;
             }
-            sw.Stop();
 
-            var avgTime = sw.Elapsed.TotalMilliseconds / iterations;
+            double avgTime = 0;
+            foreach (var t in times) avgTime += t;
+            avgTime /= iterations;
+
+            double sumSquares = 0;
+            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
+            double stdDev = Math.Sqrt( sumSquares / iterations );
+
             // Forward: 2*M*K*N, Backward: ~4*M*K*N (two matmuls for gradients)
             var flops = 6.0 * M * K * N;
-            var gflops = (flops * iterations / sw.Elapsed.TotalSeconds) / 1e9;
+            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
 
-            sb.AppendLine( $"  Average time: {avgTime:F3} ms" );
-            sb.AppendLine( $"  Performance: {gflops:F2} GFLOPS" );
-            sb.AppendLine();
+            string sizeStr = $"{M}x{K} @ {K}x{N}";
+            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
     }
 }
