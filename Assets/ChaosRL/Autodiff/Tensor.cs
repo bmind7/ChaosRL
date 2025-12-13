@@ -396,12 +396,22 @@ namespace ChaosRL
             // Forward pass: C[i,j] = sum_k A[i,k] * B[k,j]
             using (var nativeA = new NativeArray<float>( Data, Allocator.TempJob ))
             using (var nativeB = new NativeArray<float>( other.Data, Allocator.TempJob ))
+            using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
             using (var nativeC = new NativeArray<float>( M * N, Allocator.TempJob ))
             {
+                var transposeJob = new TransposeJob
+                {
+                    Input = nativeB,
+                    Output = nativeBT,
+                    Rows = K,
+                    Cols = N
+                };
+                transposeJob.Run();
+
                 var job = new MatMulJob
                 {
                     A = nativeA,
-                    B = nativeB,
+                    B = nativeBT,
                     C = nativeC,
                     M = M,
                     K = K,
