@@ -2,6 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
+
 namespace ChaosRL
 {
     /// <summary>
@@ -390,17 +394,21 @@ namespace ChaosRL
             var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
 
             // Forward pass: C[i,j] = sum_k A[i,k] * B[k,j]
-            for (int i = 0; i < M; i++)
+            using (var nativeA = new NativeArray<float>( Data, Allocator.TempJob ))
+            using (var nativeB = new NativeArray<float>( other.Data, Allocator.TempJob ))
+            using (var nativeC = new NativeArray<float>( M * N, Allocator.TempJob ))
             {
-                for (int j = 0; j < N; j++)
+                var job = new MatMulJob
                 {
-                    float sum = 0f;
-                    for (int k = 0; k < K; k++)
-                    {
-                        sum += Data[ i * K + k ] * other.Data[ k * N + j ];
-                    }
-                    result.Data[ i * N + j ] = sum;
-                }
+                    A = nativeA,
+                    B = nativeB,
+                    C = nativeC,
+                    M = M,
+                    K = K,
+                    N = N
+                };
+                job.Run();
+                nativeC.CopyTo( result.Data );
             }
 
             result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;

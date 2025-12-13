@@ -1,3 +1,7 @@
 {
-	"name": "ChaosRL"
+	"name": "ChaosRL",
+    "references": [
+        "Unity.Burst",
+        "Unity.Collections"
+    ]
 }
