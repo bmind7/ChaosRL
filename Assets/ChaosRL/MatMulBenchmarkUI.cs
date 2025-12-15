@@ -10,10 +10,11 @@ namespace ChaosRL
 {
     public class MatMulBenchmarkUI : MonoBehaviour
     {
+        //------------------------------------------------------------------
         private string _benchmarkResults = "Press 'Run Benchmark' to start...";
         private Vector2 _scrollPosition;
         private bool _isRunning = false;
-
+        //------------------------------------------------------------------
         private void OnGUI()
         {
             GUILayout.BeginArea( new Rect( 10, 10, Screen.width - 20, Screen.height - 20 ) );
@@ -41,7 +42,7 @@ namespace ChaosRL
 
             GUILayout.EndArea();
         }
-
+        //------------------------------------------------------------------
         private void RunBenchmarks()
         {
             var sb = new StringBuilder();
@@ -78,7 +79,7 @@ namespace ChaosRL
 
             _benchmarkResults = sb.ToString();
         }
-
+        //------------------------------------------------------------------
         private void RunTensorMatMulOnly( int M, int K, int N, StringBuilder sb )
         {
             const int warmup = 3;
@@ -122,7 +123,7 @@ namespace ChaosRL
             string sizeStr = $"{M}x{K} @ {K}x{N}";
             sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
-
+        //------------------------------------------------------------------
         private void RunTensorMatMulWithBackward( int M, int K, int N, StringBuilder sb )
         {
             const int warmup = 3;
@@ -175,5 +176,6 @@ namespace ChaosRL
             string sizeStr = $"{M}x{K} @ {K}x{N}";
             sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
+        //------------------------------------------------------------------
     }
 }
