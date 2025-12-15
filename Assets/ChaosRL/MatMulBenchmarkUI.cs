@@ -1,10 +1,9 @@
 using System;
+using System.Collections;
 using System.Diagnostics;
 using System.Text;
 
 using UnityEngine;
-
-using ChaosRL;
 
 namespace ChaosRL
 {
@@ -25,11 +24,8 @@ namespace ChaosRL
                 if (!_isRunning)
                 {
                     _isRunning = true;
-                    _benchmarkResults = "Running benchmarks... (UI will freeze briefly)\n";
-                    // Force a repaint so the "Running..." message appears
-                    // Note: The benchmark runs synchronously to ensure timing accuracy without frame overhead
-                    RunBenchmarks();
-                    _isRunning = false;
+                    _benchmarkResults = "Running benchmarks... (UI will update progressively)\n";
+                    StartCoroutine( RunBenchmarks() );
                 }
             }
             GUILayout.EndHorizontal();
@@ -43,7 +39,7 @@ namespace ChaosRL
             GUILayout.EndArea();
         }
         //------------------------------------------------------------------
-        private void RunBenchmarks()
+        private IEnumerator RunBenchmarks()
         {
             var sb = new StringBuilder();
             sb.AppendLine( $"Benchmark started at {DateTime.Now}" );
@@ -56,10 +52,14 @@ namespace ChaosRL
             sb.AppendLine( new string( '-', 80 ) );
             sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
             sb.AppendLine( new string( '-', 80 ) );
+            _benchmarkResults = sb.ToString();
+            yield return null;
 
             foreach (var size in sizes)
             {
                 RunTensorMatMulOnly( size, size, size, sb );
+                _benchmarkResults = sb.ToString();
+                yield return null;
             }
             sb.AppendLine( new string( '-', 80 ) );
             sb.AppendLine();
@@ -68,16 +68,21 @@ namespace ChaosRL
             sb.AppendLine( new string( '-', 80 ) );
             sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
             sb.AppendLine( new string( '-', 80 ) );
+            _benchmarkResults = sb.ToString();
+            yield return null;
 
             foreach (var size in sizes)
             {
                 RunTensorMatMulWithBackward( size, size, size, sb );
+                _benchmarkResults = sb.ToString();
+                yield return null;
             }
             sb.AppendLine( new string( '-', 80 ) );
 
             sb.AppendLine( "Done." );
 
             _benchmarkResults = sb.ToString();
+            _isRunning = false;
         }
         //------------------------------------------------------------------
         private void RunTensorMatMulOnly( int M, int K, int N, StringBuilder sb )
