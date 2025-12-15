@@ -24,7 +24,7 @@ namespace ChaosRL
         }
     }
 
-    [BurstCompile]
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
     public struct MatMulJob : IJob
     {
         [ReadOnly] public NativeArray<float> A;

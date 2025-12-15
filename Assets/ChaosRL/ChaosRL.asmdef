@@ -2,6 +2,7 @@
 	"name": "ChaosRL",
     "references": [
         "Unity.Burst",
-        "Unity.Collections"
+        "Unity.Collections",
+        "Unity.Mathematics"
     ]
 }
