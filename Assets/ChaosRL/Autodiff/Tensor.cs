@@ -394,32 +394,70 @@ namespace ChaosRL
             var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
 
             // Forward pass: C[i,j] = sum_k A[i,k] * B[k,j]
+            // using (var nativeA = new NativeArray<float>( Data, Allocator.TempJob ))
+            // using (var nativeB = new NativeArray<float>( other.Data, Allocator.TempJob ))
+            // using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
+            // using (var nativeC = new NativeArray<float>( M * N, Allocator.TempJob ))
+            // {
+            //     var transposeJob = new TransposeJob
+            //     {
+            //         Input = nativeB,
+            //         Output = nativeBT,
+            //         Rows = K,
+            //         Cols = N
+            //     };
+            //     transposeJob.Run();
+
+            //     var job = new MatMulJob
+            //     {
+            //         A = nativeA,
+            //         B = nativeBT,
+            //         C = nativeC,
+            //         M = M,
+            //         K = K,
+            //         N = N
+            //     };
+            //     job.Run();
+            //     nativeC.CopyTo( result.Data );
+            // }
+
+            // Forward pass: C = A(MxK) @ B(KxN)
+            // Multi-threaded naive GEMM (parallelized over output elements), reusing TransposeParallelJob
+            // so the inner loop reads contiguous memory from BT.
             using (var nativeA = new NativeArray<float>( Data, Allocator.TempJob ))
             using (var nativeB = new NativeArray<float>( other.Data, Allocator.TempJob ))
             using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
             using (var nativeC = new NativeArray<float>( M * N, Allocator.TempJob ))
             {
-                var transposeJob = new TransposeJob
+                var tJob = new TransposeParallelJob
                 {
                     Input = nativeB,
                     Output = nativeBT,
                     Rows = K,
                     Cols = N
                 };
-                transposeJob.Run();
 
-                var job = new MatMulJob
+                var tHandle = tJob.Schedule( K * N, 64 );
+
+                var mmJob = new MatMulNaiveParallelJob
                 {
                     A = nativeA,
-                    B = nativeBT,
+                    BT = nativeBT,
                     C = nativeC,
                     M = M,
                     K = K,
                     N = N
                 };
-                job.Run();
+
+                // Batch size is a tradeoff between scheduling overhead and load balancing.
+                mmJob.Schedule( M * N, 32, tHandle ).Complete();
                 nativeC.CopyTo( result.Data );
             }
+
+
+
+
+
 
             result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;
             if (result.RequiresGrad == false)

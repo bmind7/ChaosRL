@@ -46,7 +46,7 @@ namespace ChaosRL
             sb.AppendLine();
 
             // Define sizes to benchmark
-            int[] sizes = { 64, 128, 256, 512 };
+            int[] sizes = { 64, 128, 256, 512, 1024, 2048 };
 
             sb.AppendLine( "CPU Results (MatMul Only):" );
             sb.AppendLine( new string( '-', 80 ) );
@@ -73,7 +73,7 @@ namespace ChaosRL
 
             foreach (var size in sizes)
             {
-                RunTensorMatMulWithBackward( size, size, size, sb );
+                // RunTensorMatMulWithBackward( size, size, size, sb );
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }

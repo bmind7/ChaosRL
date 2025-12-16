@@ -1,10 +1,13 @@
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
+using Unity.Mathematics;
 
 namespace ChaosRL
 {
-    [BurstCompile]
+    //------------------------------------------------------------------
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
     public struct TransposeJob : IJob
     {
         [ReadOnly] public NativeArray<float> Input;
@@ -23,7 +26,26 @@ namespace ChaosRL
             }
         }
     }
+    //------------------------------------------------------------------
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
+    public struct TransposeParallelJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> Input;   // (Rows x Cols)
+        [WriteOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> Output; // (Cols x Rows)
+        public int Rows; // K
+        public int Cols; // N
 
+        public void Execute( int index )
+        {
+            int i = index / Cols;   // row in Input
+            int j = index - i * Cols;
+
+            Output[ j * Rows + i ] = Input[ i * Cols + j ];
+        }
+    }
+    //------------------------------------------------------------------
     [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
     public struct MatMulJob : IJob
     {
@@ -50,4 +72,41 @@ namespace ChaosRL
             }
         }
     }
+    //------------------------------------------------------------------
+    /// <summary>
+    /// Naive GEMM using transposed B for better locality:
+    /// C(MxN) = A(MxK) @ B(KxN), where BT is B transposed into (N x K).
+    /// Parallelized over output elements (one job index computes one C[i,j]).
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
+    public struct MatMulNaiveParallelJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> A; // M x K
+
+        [ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> BT; // N x K (transposed B)
+
+        [WriteOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> C; // M x N
+
+        public int M, K, N;
+
+        public void Execute( int index )
+        {
+            int i = index / N;
+            int j = index - i * N;
+
+            int aRow = i * K;
+            int btRow = j * K;
+
+            float sum = 0f;
+            for (int k = 0; k < K; k++)
+                sum += A[ aRow + k ] * BT[ btRow + k ];
+
+            C[ index ] = sum;
+        }
+    }
+    //------------------------------------------------------------------
+
 }
