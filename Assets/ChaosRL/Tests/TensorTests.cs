@@ -1551,8 +1551,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1565,8 +1565,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1579,8 +1579,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1643,7 +1643,7 @@ namespace ChaosRL.Tests
             Assert.That( a.Grad[ 2 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
 
             // b's gradient is the same array
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1678,8 +1678,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1692,8 +1692,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1706,8 +1706,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1720,8 +1720,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Should share the same data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1775,8 +1775,8 @@ namespace ChaosRL.Tests
 
             // No dimensions of size 1, but should still return a view
             Assert.That( b.Shape, Is.EqualTo( new[] { 2, 3, 4 } ) );
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1794,7 +1794,7 @@ namespace ChaosRL.Tests
             Assert.That( a.Grad[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
 
             // b's gradient is the same array
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1832,9 +1832,9 @@ namespace ChaosRL.Tests
             Assert.That( c.Size, Is.EqualTo( a.Size ) );
 
             // All should share same data/grad arrays
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( b.Data, c.Data );
-            Assert.AreSame( a.Grad, c.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( b.Data == c.Data );
+            Assert.That( a.Grad == c.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1867,8 +1867,8 @@ namespace ChaosRL.Tests
             Assert.That( d.Shape, Is.EqualTo( new[] { 2, 3 } ) );
 
             // All should share same data
-            Assert.AreSame( a.Data, d.Data );
-            Assert.AreSame( a.Grad, d.Grad );
+            Assert.That( a.Data == d.Data );
+            Assert.That( a.Grad == d.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1882,8 +1882,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Data, Is.EqualTo( new[] { 1f, 2f, 3f, 4f, 5f, 6f } ) );
 
             // Verify data is shared
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1896,8 +1896,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Verify data is shared
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1910,8 +1910,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 24 ) );
 
             // Verify data is shared
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1924,8 +1924,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 6 ) );
 
             // Still should be a view sharing data
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -1938,8 +1938,8 @@ namespace ChaosRL.Tests
             Assert.That( b.Size, Is.EqualTo( 1000 ) );
 
             // Verify data is shared
-            Assert.AreSame( a.Data, b.Data );
-            Assert.AreSame( a.Grad, b.Grad );
+            Assert.That( a.Data == b.Data );
+            Assert.That( a.Grad == b.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -2014,8 +2014,8 @@ namespace ChaosRL.Tests
             }
 
             // All tensors should share the same grad array
-            Assert.AreSame( a.Grad, b.Grad );
-            Assert.AreSame( b.Grad, c.Grad );
+            Assert.That( a.Grad == b.Grad );
+            Assert.That( b.Grad == c.Grad );
         }
         //------------------------------------------------------------------
         [Test]
@@ -2062,8 +2062,8 @@ namespace ChaosRL.Tests
             Assert.That( e.Shape, Is.EqualTo( new[] { 3, 2 } ) );
 
             // All should share same data
-            Assert.AreSame( a.Data, e.Data );
-            Assert.AreSame( a.Grad, e.Grad );
+            Assert.That( a.Data == e.Data );
+            Assert.That( a.Grad == e.Grad );
         }
         //------------------------------------------------------------------
         [Test]

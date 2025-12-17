@@ -1,5 +1,7 @@
 using System;
 
+using Unity.Collections;
+
 namespace ChaosRL
 {
     public static class Utils
@@ -46,7 +48,7 @@ namespace ChaosRL
                     int srcIdx = indices[ start + i ];
                     int srcStart = source.ToFlatIndex( new[] { srcIdx, 0 } );
                     int dstStart = result.ToFlatIndex( new[] { i, 0 } );
-                    Array.Copy( source.Data, srcStart, result.Data, dstStart, features );
+                    NativeArray<float>.Copy( source.Data, srcStart, result.Data, dstStart, features );
                 }
             }
             else // 1D
