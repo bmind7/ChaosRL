@@ -72,6 +72,7 @@ namespace ChaosRL
         public NativeArray<float> C; // M x N
 
         public int M, K, N;
+        // Used during backward pass to accumulate gradients.
         public bool Accumulate;
 
         public void Execute( int index )

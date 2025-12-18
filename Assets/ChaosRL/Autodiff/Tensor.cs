@@ -474,7 +474,6 @@ namespace ChaosRL
             result._backward = () =>
             {
                 JobHandle aHandle = default;
-                JobHandle bHandle = default;
 
                 // dL/dA = dC(MxN) @ B^T(NxK)
                 // Use MatMulNaiveParallelJob by treating BT as transpose(secondOperand).
@@ -518,8 +517,8 @@ namespace ChaosRL
                             Cols = N
                         };
 
-                        var tAHandle = tAJob.Schedule( M * K, 64 );
-                        var tDCHandle = tDCJob.Schedule( M * N, 64 );
+                        var tAHandle = tAJob.Schedule( M * K, 64, aHandle );
+                        var tDCHandle = tDCJob.Schedule( M * N, 64, aHandle );
 
                         var dep = JobHandle.CombineDependencies( tAHandle, tDCHandle );
 
@@ -534,9 +533,7 @@ namespace ChaosRL
                             Accumulate = true
                         };
 
-                        bHandle = dBJob.Schedule( K * N, 32, dep );
-
-                        JobHandle.CombineDependencies( aHandle, bHandle ).Complete();
+                        dBJob.Schedule( K * N, 32, dep ).Complete();
                         return;
                     }
                 }
