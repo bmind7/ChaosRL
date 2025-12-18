@@ -37,16 +37,47 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 ---
 
 ### 🧠 Roadmap
-- ~~Tensor class with better data layout~~ (**200x-400x** speed up of MatMul)
-- Backend with **vectorized ops (CPU)**
-- **Multithreading** support for simulation and training
+- ~~Tensor class with better data layout~~ (**200x-400x** speedup of MatMul)
+- ~~Backend with vectorized ops (CPU)~~ (**50x** speedup)
+- ~~Multithreading** support for simulation and training~~ (**8x** speedup)
+- **K-Blocking** support for MatMul with fused Mult + Add operations (that hould close the gap with PyTorch)
+- Refactor agent code to support batching during inference
 - **Compute shader** backend (GPU)
 - Core plumbing: Agents, Academy, Save/Load, Configs, Telemetry
 
 ---
 
+### Benchmarks
+
+**ChaosRL** MatMul
+--------------------------------------------------------------------------------
+Matrix Size               Avg Time (ms)        Std Dev (ms)         GFLOPS    
+--------------------------------------------------------------------------------
+64x64 @ 64x64             0.078                0.008                20.28     
+128x128 @ 128x128         0.260                0.021                48.39     
+256x256 @ 256x256         1.004                0.059                100.28    
+512x512 @ 512x512         3.481                0.177                231.32    
+1024x1024 @ 1024x1024     27.856               0.971                231.28    
+2048x2048 @ 2048x2048     202.621              3.737                254.36    
+--------------------------------------------------------------------------------
+
+**PyTorch** MatMul
+--------------------------------------------------------------------------------
+Matrix Size          Avg Time (ms)        Std Dev (ms)         GFLOPS
+--------------------------------------------------------------------------------
+64x64 @ 64x64       0.343                0.200                4.58
+128x128 @ 128x128      0.328                0.072                38.37
+256x256 @ 256x256      0.651                0.157                154.71
+512x512 @ 512x512      2.340                0.286                344.21
+1024x1024 @ 1024x1024     12.508               0.263                515.05
+2048x2048 @ 2048x2048     98.482               1.084                523.34
+--------------------------------------------------------------------------------
+
+*Note: to benchmark build with **IL2CPP** backend and **MatMultBenchmark** scene*
+
+---
+
 ### ❓Current issues 
-- Performance on CPU is still way behind libs like PyTorch
 - Broadcasting is very limited for now and supports only shape mismatch. For example, **Add** two tensors (2, 5, 10) and (5,10) will work, because the tail of the shape is identical. Operations on scalars tensors also will work because scalar has shape (1) which can match anything.
 - Because of limited broadcasting **Normalize()** method will work only on whole tensor, dim=0 or dim=last_dimention 
 - **ExpandLast** works only for last dim. I need to add general **Expand** then **Normalize** in any dimension will be easy
@@ -54,4 +85,4 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 ---
 
 ### 💡 Notes
-This is not a production ready code. It’s a learning playground to understand how PPO and autodiff actually work under the hood. 
+This is not a production ready code yet. It’s a learning playground to understand how PPO and autodiff actually work under the hood. 
