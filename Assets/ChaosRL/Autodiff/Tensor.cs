@@ -15,9 +15,6 @@ namespace ChaosRL
     public class Tensor : IDisposable
     {
         //------------------------------------------------------------------
-        private NativeArray<float> _data;
-        private NativeArray<float> _grad;
-
         public ref NativeArray<float> Data => ref _data;
         public ref NativeArray<float> Grad => ref _grad;
         public int[] Shape { get; private set; }
@@ -27,8 +24,12 @@ namespace ChaosRL
         public bool IsScalar => Size == 1;
         public bool RequiresGrad { get; set; }
 
+        private NativeArray<float> _data;
+        private NativeArray<float> _grad;
+        // For view tensors, keep a strong reference to the tensor that owns the storage.
+        // This prevents the owning tensor from being GC'd/finalized while views are still alive.
+        private Tensor _storageOwner;
         private Action _backward;
-        private readonly bool _ownsStorage;
         private bool _disposed;
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
@@ -52,6 +53,19 @@ namespace ChaosRL
                 Size *= dim;
         }
         //------------------------------------------------------------------
+        private static Tensor ResolveStorageOwner( Tensor t )
+        {
+            if (t == null)
+                throw new ArgumentNullException( nameof( t ) );
+
+            var current = t;
+            while (current._storageOwner != null)
+                current = current._storageOwner;
+
+            return current;
+        }
+
+        //------------------------------------------------------------------
         // TODO: switch to params int[] for shape to improve usability
         public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
         {
@@ -62,7 +76,7 @@ namespace ChaosRL
 
             _data = new NativeArray<float>( Size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
             _grad = new NativeArray<float>( Size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
-            _ownsStorage = true;
+            _storageOwner = null;
 
             if (data != null)
                 _data.CopyFrom( data );
@@ -73,17 +87,22 @@ namespace ChaosRL
             _backward = null;
         }
         //------------------------------------------------------------------
-        private Tensor( int[] shape, NativeArray<float> data, NativeArray<float> grad, Tensor[] children, string name, bool requiresGrad )
+        private Tensor( int[] shape, Tensor storageOwner, Tensor[] children, string name, bool requiresGrad )
         {
             ValidateAndCalculateSize( shape );
 
-            if (!data.IsCreated || !grad.IsCreated)
+            var owner = ResolveStorageOwner( storageOwner );
+            if (owner._disposed)
+                throw new ObjectDisposedException( nameof( Tensor ), "Storage owner tensor is disposed" );
+
+            if (!owner._data.IsCreated || !owner._grad.IsCreated)
                 throw new ArgumentException( "Data/Grad must be created for view tensors" );
-            if (data.Length != Size || grad.Length != Size)
+            if (owner._data.Length != Size || owner._grad.Length != Size)
                 throw new ArgumentException( $"View tensor storage length must match shape size {Size}" );
 
-            _data = data;
-            _grad = grad;
+            _data = owner._data;
+            _grad = owner._grad;
+            _storageOwner = owner;
             Name = name;
             Children = new HashSet<Tensor>();
             if (children != null)
@@ -91,7 +110,6 @@ namespace ChaosRL
                     Children.Add( child );
             RequiresGrad = requiresGrad;
             _backward = null;
-            _ownsStorage = false;
         }
         //------------------------------------------------------------------
         public Tensor( int[] shape, Tensor[] children, string name = "" ) : this( shape, (float[])null, name )
@@ -127,7 +145,9 @@ namespace ChaosRL
 
             _disposed = true;
 
-            if (_ownsStorage)
+            // Only the owning tensor is responsible for disposing the shared storage.
+            // Views keep a strong reference to the owner via _storageOwner.
+            if (_storageOwner == null)
             {
                 if (_grad.IsCreated)
                     _grad.Dispose();
@@ -137,6 +157,7 @@ namespace ChaosRL
 
             _grad = default;
             _data = default;
+            _storageOwner = null;
         }
         //------------------------------------------------------------------
         public static implicit operator Tensor( float f )
@@ -900,7 +921,7 @@ namespace ChaosRL
                 newShape[ i + 1 ] = Shape[ i ];
 
             // Create view tensor sharing data/grad (no allocation)
-            return new Tensor( newShape, Data, Grad, new[] { this }, $"unsqueeze({dim})", RequiresGrad );
+            return new Tensor( newShape, this, new[] { this }, $"unsqueeze({dim})", RequiresGrad );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -939,7 +960,7 @@ namespace ChaosRL
                     newShape = new[] { 1 }; // Keep as scalar [1]
 
                 // Create view tensor sharing data/grad (no allocation)
-                return new Tensor( newShape, Data, Grad, new[] { this }, $"squeeze({d})", RequiresGrad );
+                return new Tensor( newShape, this, new[] { this }, $"squeeze({d})", RequiresGrad );
             }
             else
             {
@@ -956,7 +977,7 @@ namespace ChaosRL
                 var newShape = newShapeList.ToArray();
 
                 // Create view tensor sharing data/grad (no allocation)
-                return new Tensor( newShape, Data, Grad, new[] { this }, "squeeze()", RequiresGrad );
+                return new Tensor( newShape, this, new[] { this }, "squeeze()", RequiresGrad );
             }
         }
         //------------------------------------------------------------------
@@ -1104,7 +1125,7 @@ namespace ChaosRL
                     $"Total size must remain the same. Current size: {Size}, new size: {newSize}" );
 
             // Create view tensor sharing data/grad (no allocation)
-            return new Tensor( newShape, Data, Grad, new[] { this }, $"reshape({string.Join( ",", newShape )})", RequiresGrad );
+            return new Tensor( newShape, this, new[] { this }, $"reshape({string.Join( ",", newShape )})", RequiresGrad );
         }
         //------------------------------------------------------------------
         private static bool CanBroadcastModulo( Tensor a, Tensor b )
