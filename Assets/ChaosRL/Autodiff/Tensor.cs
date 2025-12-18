@@ -37,8 +37,7 @@ namespace ChaosRL
             set => Data[ ToFlatIndex( indices ) ] = value;
         }
         //------------------------------------------------------------------
-        // TODO: switch to params int[] for shape to improve usability
-        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
+        private void ValidateAndCalculateSize( int[] shape )
         {
             if (shape == null || shape.Length == 0)
                 throw new ArgumentException( "Shape must have at least one dimension", nameof( shape ) );
@@ -51,6 +50,12 @@ namespace ChaosRL
             Size = 1;
             foreach (var dim in Shape)
                 Size *= dim;
+        }
+        //------------------------------------------------------------------
+        // TODO: switch to params int[] for shape to improve usability
+        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
+        {
+            ValidateAndCalculateSize( shape );
 
             if (data != null && data.Length != Size)
                 throw new ArgumentException( $"Data length {data.Length} doesn't match shape size {Size}" );
@@ -68,26 +73,9 @@ namespace ChaosRL
             _backward = null;
         }
         //------------------------------------------------------------------
-        public Tensor( int[] shape, Tensor[] children, string name = "" ) : this( shape, (float[])null, name )
-        {
-            if (children != null)
-                foreach (var child in children)
-                    Children.Add( child );
-        }
-        //------------------------------------------------------------------
         private Tensor( int[] shape, NativeArray<float> data, NativeArray<float> grad, Tensor[] children, string name, bool requiresGrad )
         {
-            if (shape == null || shape.Length == 0)
-                throw new ArgumentException( "Shape must have at least one dimension", nameof( shape ) );
-
-            foreach (var dim in shape)
-                if (dim <= 0)
-                    throw new ArgumentException( "All dimensions must be positive", nameof( shape ) );
-
-            Shape = (int[])shape.Clone();
-            Size = 1;
-            foreach (var dim in Shape)
-                Size *= dim;
+            ValidateAndCalculateSize( shape );
 
             if (!data.IsCreated || !grad.IsCreated)
                 throw new ArgumentException( "Data/Grad must be created for view tensors" );
@@ -104,6 +92,13 @@ namespace ChaosRL
             RequiresGrad = requiresGrad;
             _backward = null;
             _ownsStorage = false;
+        }
+        //------------------------------------------------------------------
+        public Tensor( int[] shape, Tensor[] children, string name = "" ) : this( shape, (float[])null, name )
+        {
+            if (children != null)
+                foreach (var child in children)
+                    Children.Add( child );
         }
         //------------------------------------------------------------------
         // Scalar tensor constructor
