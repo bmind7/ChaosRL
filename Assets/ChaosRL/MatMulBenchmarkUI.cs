@@ -73,7 +73,7 @@ namespace ChaosRL
 
             foreach (var size in sizes)
             {
-                // RunTensorMatMulWithBackward( size, size, size, sb );
+                RunTensorMatMulWithBackward( size, size, size, sb );
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }

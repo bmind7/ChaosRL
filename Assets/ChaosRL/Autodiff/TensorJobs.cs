@@ -67,10 +67,12 @@ namespace ChaosRL
         [ReadOnly, NativeDisableParallelForRestriction]
         public NativeArray<float> BT; // N x K (transposed B)
 
-        [WriteOnly, NativeDisableParallelForRestriction]
+        // Not WriteOnly because backward can accumulate with +=.
+        [NativeDisableParallelForRestriction]
         public NativeArray<float> C; // M x N
 
         public int M, K, N;
+        public bool Accumulate;
 
         public void Execute( int index )
         {
@@ -84,7 +86,10 @@ namespace ChaosRL
             for (int k = 0; k < K; k++)
                 sum += A[ aRow + k ] * BT[ btRow + k ];
 
-            C[ index ] = sum;
+            if (Accumulate)
+                C[ index ] += sum;
+            else
+                C[ index ] = sum;
         }
     }
     //------------------------------------------------------------------

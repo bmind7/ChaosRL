@@ -439,6 +439,8 @@ namespace ChaosRL
             // so the inner loop reads contiguous memory from BT.
             using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
             {
+                // To allow contiguous reads, we transpose B into BT (N x K)
+                // that makes matmul cache friendly
                 var tJob = new TransposeParallelJob
                 {
                     Input = other.Data,
@@ -456,7 +458,8 @@ namespace ChaosRL
                     C = result.Data,
                     M = M,
                     K = K,
-                    N = N
+                    N = N,
+                    Accumulate = false
                 };
 
                 // Batch size is a tradeoff between scheduling overhead and load balancing.
@@ -470,39 +473,75 @@ namespace ChaosRL
             // Backward pass
             result._backward = () =>
             {
-                // dL/dA[i,k] = sum_j dL/dC[i,j] * B[k,j]
+                JobHandle aHandle = default;
+                JobHandle bHandle = default;
+
+                // dL/dA = dC(MxN) @ B^T(NxK)
+                // Use MatMulNaiveParallelJob by treating BT as transpose(secondOperand).
+                // secondOperand is B^T, so BT is (B^T)^T = B (KxN), which is already row-major in other.Data.
                 if (this.RequiresGrad)
                 {
-                    for (int i = 0; i < M; i++)
+                    var dAJob = new MatMulNaiveParallelJob
                     {
-                        for (int k = 0; k < K; k++)
+                        A = result.Grad,   // M x N
+                        BT = other.Data,   // K x N  (acts as BT when N_out=K and K_in=N)
+                        C = Grad,          // M x K
+                        M = M,
+                        K = N,
+                        N = K,
+                        Accumulate = true
+                    };
+
+                    aHandle = dAJob.Schedule( M * K, 32 );
+                }
+
+                // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
+                // For cache friendliness, transpose A and dC so the inner loop reads contiguous memory.
+                if (other.RequiresGrad)
+                {
+                    using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
+                    using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
+                    {
+                        var tAJob = new TransposeParallelJob
                         {
-                            float grad_sum = 0f;
-                            for (int j = 0; j < N; j++)
-                            {
-                                grad_sum += result.Grad[ i * N + j ] * other.Data[ k * N + j ];
-                            }
-                            Grad[ i * K + k ] += grad_sum;
-                        }
+                            Input = Data,
+                            Output = nativeAT,
+                            Rows = M,
+                            Cols = K
+                        };
+
+                        var tDCJob = new TransposeParallelJob
+                        {
+                            Input = result.Grad,
+                            Output = nativeDCT,
+                            Rows = M,
+                            Cols = N
+                        };
+
+                        var tAHandle = tAJob.Schedule( M * K, 64 );
+                        var tDCHandle = tDCJob.Schedule( M * N, 64 );
+
+                        var dep = JobHandle.CombineDependencies( tAHandle, tDCHandle );
+
+                        var dBJob = new MatMulNaiveParallelJob
+                        {
+                            A = nativeAT,      // K x M
+                            BT = nativeDCT,    // N x M (transpose of dC)
+                            C = other.Grad,    // K x N
+                            M = K,
+                            K = M,
+                            N = N,
+                            Accumulate = true
+                        };
+
+                        bHandle = dBJob.Schedule( K * N, 32, dep );
+
+                        JobHandle.CombineDependencies( aHandle, bHandle ).Complete();
+                        return;
                     }
                 }
 
-                // dL/dB[k,j] = sum_i dL/dC[i,j] * A[i,k]
-                if (other.RequiresGrad)
-                {
-                    for (int k = 0; k < K; k++)
-                    {
-                        for (int j = 0; j < N; j++)
-                        {
-                            float grad_sum = 0f;
-                            for (int i = 0; i < M; i++)
-                            {
-                                grad_sum += result.Grad[ i * N + j ] * Data[ i * K + k ];
-                            }
-                            other.Grad[ k * N + j ] += grad_sum;
-                        }
-                    }
-                }
+                aHandle.Complete();
             };
 
             return result;
