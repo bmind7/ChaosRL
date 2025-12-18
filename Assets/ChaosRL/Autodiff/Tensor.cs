@@ -111,6 +111,39 @@ namespace ChaosRL
         {
         }
         //------------------------------------------------------------------
+        // TODO: move to ArenaPool and TensorStorage pattern
+        // Relying on finalizer to catch undisposed tensors is bad practice
+        // Finalizers are non-deterministic and can lead to memory leaks
+        ~Tensor()
+        {
+            Dispose( false );
+        }
+        //------------------------------------------------------------------
+        public void Dispose()
+        {
+            Dispose( true );
+            GC.SuppressFinalize( this );
+        }
+        //------------------------------------------------------------------
+        private void Dispose( bool disposing )
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            if (_ownsStorage)
+            {
+                if (_grad.IsCreated)
+                    _grad.Dispose();
+                if (_data.IsCreated)
+                    _data.Dispose();
+            }
+
+            _grad = default;
+            _data = default;
+        }
+        //------------------------------------------------------------------
         public static implicit operator Tensor( float f )
         {
             return new Tensor( f );
@@ -1195,35 +1228,5 @@ namespace ChaosRL
             return sb.ToString();
         }
         //------------------------------------------------------------------
-
-        ~Tensor()
-        {
-            Dispose( false );
-        }
-
-        public void Dispose()
-        {
-            Dispose( true );
-            GC.SuppressFinalize( this );
-        }
-
-        private void Dispose( bool disposing )
-        {
-            if (_disposed)
-                return;
-
-            _disposed = true;
-
-            if (_ownsStorage)
-            {
-                if (_grad.IsCreated)
-                    _grad.Dispose();
-                if (_data.IsCreated)
-                    _data.Dispose();
-            }
-
-            _grad = default;
-            _data = default;
-        }
     }
 }
