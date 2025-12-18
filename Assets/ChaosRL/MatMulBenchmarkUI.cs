@@ -1,19 +1,19 @@
 using System;
+using System.Collections;
 using System.Diagnostics;
 using System.Text;
 
 using UnityEngine;
 
-using ChaosRL;
-
 namespace ChaosRL
 {
     public class MatMulBenchmarkUI : MonoBehaviour
     {
+        //------------------------------------------------------------------
         private string _benchmarkResults = "Press 'Run Benchmark' to start...";
         private Vector2 _scrollPosition;
         private bool _isRunning = false;
-
+        //------------------------------------------------------------------
         private void OnGUI()
         {
             GUILayout.BeginArea( new Rect( 10, 10, Screen.width - 20, Screen.height - 20 ) );
@@ -24,11 +24,8 @@ namespace ChaosRL
                 if (!_isRunning)
                 {
                     _isRunning = true;
-                    _benchmarkResults = "Running benchmarks... (UI will freeze briefly)\n";
-                    // Force a repaint so the "Running..." message appears
-                    // Note: The benchmark runs synchronously to ensure timing accuracy without frame overhead
-                    RunBenchmarks();
-                    _isRunning = false;
+                    _benchmarkResults = "Running benchmarks... (UI will update progressively)\n";
+                    StartCoroutine( RunBenchmarks() );
                 }
             }
             GUILayout.EndHorizontal();
@@ -41,40 +38,57 @@ namespace ChaosRL
 
             GUILayout.EndArea();
         }
-
-        private void RunBenchmarks()
+        //------------------------------------------------------------------
+        private IEnumerator RunBenchmarks()
         {
             var sb = new StringBuilder();
             sb.AppendLine( $"Benchmark started at {DateTime.Now}" );
-            sb.AppendLine( "--------------------------------------------------" );
+            sb.AppendLine();
 
             // Define sizes to benchmark
-            int[] sizes = { 64, 128, 256, 512 };
+            int[] sizes = { 64, 128, 256, 512, 1024, 2048 };
+
+            sb.AppendLine( "CPU Results (MatMul Only):" );
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
+            sb.AppendLine( new string( '-', 80 ) );
+            _benchmarkResults = sb.ToString();
+            yield return null;
 
             foreach (var size in sizes)
             {
                 RunTensorMatMulOnly( size, size, size, sb );
+                _benchmarkResults = sb.ToString();
+                yield return null;
             }
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine();
 
-            sb.AppendLine( "--------------------------------------------------" );
+            sb.AppendLine( "CPU Results (MatMul + Backward):" );
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
+            sb.AppendLine( new string( '-', 80 ) );
+            _benchmarkResults = sb.ToString();
+            yield return null;
 
             foreach (var size in sizes)
             {
                 RunTensorMatMulWithBackward( size, size, size, sb );
+                _benchmarkResults = sb.ToString();
+                yield return null;
             }
+            sb.AppendLine( new string( '-', 80 ) );
 
-            sb.AppendLine( "--------------------------------------------------" );
             sb.AppendLine( "Done." );
 
             _benchmarkResults = sb.ToString();
+            _isRunning = false;
         }
-
+        //------------------------------------------------------------------
         private void RunTensorMatMulOnly( int M, int K, int N, StringBuilder sb )
         {
             const int warmup = 3;
             const int iterations = 10;
-
-            sb.AppendLine( $"Running Tensor MatMul: {M}x{K} @ {K}x{N}..." );
 
             // Pre-allocate and populate tensors once
             var a = new Tensor( new[] { M, K } );
@@ -91,28 +105,34 @@ namespace ChaosRL
             }
 
             // Benchmark MatMul only
-            var sw = Stopwatch.StartNew();
+            double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
+                var sw = Stopwatch.StartNew();
                 _ = a.MatMul( b );
+                sw.Stop();
+                times[ i ] = sw.Elapsed.TotalMilliseconds;
             }
-            sw.Stop();
 
-            var avgTime = sw.Elapsed.TotalMilliseconds / iterations;
+            double avgTime = 0;
+            foreach (var t in times) avgTime += t;
+            avgTime /= iterations;
+
+            double sumSquares = 0;
+            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
+            double stdDev = Math.Sqrt( sumSquares / iterations );
+
             var flops = 2.0 * M * K * N; // multiply-add counts as 2 operations
-            var gflops = (flops * iterations / sw.Elapsed.TotalSeconds) / 1e9;
+            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
 
-            sb.AppendLine( $"  Average time: {avgTime:F3} ms" );
-            sb.AppendLine( $"  Performance: {gflops:F2} GFLOPS" );
-            sb.AppendLine();
+            string sizeStr = $"{M}x{K} @ {K}x{N}";
+            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
-
+        //------------------------------------------------------------------
         private void RunTensorMatMulWithBackward( int M, int K, int N, StringBuilder sb )
         {
             const int warmup = 3;
             const int iterations = 10;
-
-            sb.AppendLine( $"Running Tensor MatMul + Backward: {M}x{K} @ {K}x{N}..." );
 
             // Pre-allocate and populate tensors once
             var a = new Tensor( new[] { M, K } );
@@ -133,25 +153,34 @@ namespace ChaosRL
             }
 
             // Benchmark MatMul + Backward
-            var sw = Stopwatch.StartNew();
+            double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
+                var sw = Stopwatch.StartNew();
                 var result = a.MatMul( b );
                 var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();
+                sw.Stop();
+                times[ i ] = sw.Elapsed.TotalMilliseconds;
             }
-            sw.Stop();
 
-            var avgTime = sw.Elapsed.TotalMilliseconds / iterations;
+            double avgTime = 0;
+            foreach (var t in times) avgTime += t;
+            avgTime /= iterations;
+
+            double sumSquares = 0;
+            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
+            double stdDev = Math.Sqrt( sumSquares / iterations );
+
             // Forward: 2*M*K*N, Backward: ~4*M*K*N (two matmuls for gradients)
             var flops = 6.0 * M * K * N;
-            var gflops = (flops * iterations / sw.Elapsed.TotalSeconds) / 1e9;
+            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
 
-            sb.AppendLine( $"  Average time: {avgTime:F3} ms" );
-            sb.AppendLine( $"  Performance: {gflops:F2} GFLOPS" );
-            sb.AppendLine();
+            string sizeStr = $"{M}x{K} @ {K}x{N}";
+            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
+        //------------------------------------------------------------------
     }
 }

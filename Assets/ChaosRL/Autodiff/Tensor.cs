@@ -2,17 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
+
 namespace ChaosRL
 {
     /// <summary>
     /// Multi-dimensional tensor with automatic differentiation support.
     /// Data is stored in row-major (C-style) contiguous layout for cache efficiency.
     /// </summary>
-    public class Tensor
+    public class Tensor : IDisposable
     {
         //------------------------------------------------------------------
-        public float[] Data { get; private set; }
-        public float[] Grad { get; private set; }
+        public ref NativeArray<float> Data => ref _data;
+        public ref NativeArray<float> Grad => ref _grad;
         public int[] Shape { get; private set; }
         public int Size { get; private set; }
         public string Name { get; set; }
@@ -20,7 +24,13 @@ namespace ChaosRL
         public bool IsScalar => Size == 1;
         public bool RequiresGrad { get; set; }
 
+        private NativeArray<float> _data;
+        private NativeArray<float> _grad;
+        // For view tensors, keep a strong reference to the tensor that owns the storage.
+        // This prevents the owning tensor from being GC'd/finalized while views are still alive.
+        private Tensor _storageOwner;
         private Action _backward;
+        private bool _disposed;
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
         {
@@ -28,8 +38,7 @@ namespace ChaosRL
             set => Data[ ToFlatIndex( indices ) ] = value;
         }
         //------------------------------------------------------------------
-        // TODO: switch to params int[] for shape to improve usability
-        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
+        private void ValidateAndCalculateSize( int[] shape )
         {
             if (shape == null || shape.Length == 0)
                 throw new ArgumentException( "Shape must have at least one dimension", nameof( shape ) );
@@ -42,16 +51,65 @@ namespace ChaosRL
             Size = 1;
             foreach (var dim in Shape)
                 Size *= dim;
+        }
+        //------------------------------------------------------------------
+        private static Tensor ResolveStorageOwner( Tensor t )
+        {
+            if (t == null)
+                throw new ArgumentNullException( nameof( t ) );
 
-            Data = data ?? new float[ Size ];
-            Grad = new float[ Size ];
+            var current = t;
+            while (current._storageOwner != null)
+                current = current._storageOwner;
+
+            return current;
+        }
+
+        //------------------------------------------------------------------
+        // TODO: switch to params int[] for shape to improve usability
+        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
+        {
+            ValidateAndCalculateSize( shape );
+
+            if (data != null && data.Length != Size)
+                throw new ArgumentException( $"Data length {data.Length} doesn't match shape size {Size}" );
+
+            _data = new NativeArray<float>( Size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
+            _grad = new NativeArray<float>( Size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
+            _storageOwner = null;
+
+            if (data != null)
+                _data.CopyFrom( data );
+
             Name = name;
             Children = new HashSet<Tensor>();
             RequiresGrad = requiresGrad;
             _backward = null;
+        }
+        //------------------------------------------------------------------
+        private Tensor( int[] shape, Tensor storageOwner, Tensor[] children, string name, bool requiresGrad )
+        {
+            ValidateAndCalculateSize( shape );
 
-            if (data != null && data.Length != Size)
-                throw new ArgumentException( $"Data length {data.Length} doesn't match shape size {Size}" );
+            var owner = ResolveStorageOwner( storageOwner );
+            if (owner._disposed)
+                throw new ObjectDisposedException( nameof( Tensor ), "Storage owner tensor is disposed" );
+
+            if (!owner._data.IsCreated || !owner._grad.IsCreated)
+                throw new ArgumentException( "Data/Grad must be created for view tensors" );
+            if (owner._data.Length != Size || owner._grad.Length != Size)
+                throw new ArgumentException( $"View tensor storage length must match shape size {Size}" );
+
+            _data = owner._data;
+            _grad = owner._grad;
+            _storageOwner = owner;
+            Name = name;
+            Children = new HashSet<Tensor>();
+            if (children != null)
+                foreach (var child in children)
+                    Children.Add( child );
+            RequiresGrad = requiresGrad;
+            _backward = null;
         }
         //------------------------------------------------------------------
         public Tensor( int[] shape, Tensor[] children, string name = "" ) : this( shape, (float[])null, name )
@@ -64,6 +122,42 @@ namespace ChaosRL
         // Scalar tensor constructor
         public Tensor( float scalar, string name = "", bool requiresGrad = true ) : this( new[] { 1 }, new[] { scalar }, name, requiresGrad )
         {
+        }
+        //------------------------------------------------------------------
+        // TODO: move to ArenaPool and TensorStorage pattern
+        // Relying on finalizer to catch undisposed tensors is bad practice
+        // Finalizers are non-deterministic and can lead to memory leaks
+        ~Tensor()
+        {
+            Dispose( false );
+        }
+        //------------------------------------------------------------------
+        public void Dispose()
+        {
+            Dispose( true );
+            GC.SuppressFinalize( this );
+        }
+        //------------------------------------------------------------------
+        private void Dispose( bool disposing )
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            // Only the owning tensor is responsible for disposing the shared storage.
+            // Views keep a strong reference to the owner via _storageOwner.
+            if (_storageOwner == null)
+            {
+                if (_grad.IsCreated)
+                    _grad.Dispose();
+                if (_data.IsCreated)
+                    _data.Dispose();
+            }
+
+            _grad = default;
+            _data = default;
+            _storageOwner = null;
         }
         //------------------------------------------------------------------
         public static implicit operator Tensor( float f )
@@ -389,18 +483,36 @@ namespace ChaosRL
 
             var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
 
-            // Forward pass: C[i,j] = sum_k A[i,k] * B[k,j]
-            for (int i = 0; i < M; i++)
+            // Forward pass: C = A(MxK) @ B(KxN)
+            // Multi-threaded naive GEMM (parallelized over output elements), 
+            // so the inner loop reads contiguous memory from BT.
+            using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
             {
-                for (int j = 0; j < N; j++)
+                // To allow contiguous reads, we transpose B into BT (N x K)
+                // that makes matmul cache friendly
+                var tJob = new TransposeParallelJob
                 {
-                    float sum = 0f;
-                    for (int k = 0; k < K; k++)
-                    {
-                        sum += Data[ i * K + k ] * other.Data[ k * N + j ];
-                    }
-                    result.Data[ i * N + j ] = sum;
-                }
+                    Input = other.Data,
+                    Output = nativeBT,
+                    Rows = K,
+                    Cols = N
+                };
+
+                var tHandle = tJob.Schedule( K * N, 64 );
+
+                var mmJob = new MatMulNaiveParallelJob
+                {
+                    A = Data,
+                    BT = nativeBT,
+                    C = result.Data,
+                    M = M,
+                    K = K,
+                    N = N,
+                    Accumulate = false
+                };
+
+                // Batch size is a tradeoff between scheduling overhead and load balancing.
+                mmJob.Schedule( M * N, 32, tHandle ).Complete();
             }
 
             result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;
@@ -410,39 +522,72 @@ namespace ChaosRL
             // Backward pass
             result._backward = () =>
             {
-                // dL/dA[i,k] = sum_j dL/dC[i,j] * B[k,j]
+                JobHandle aHandle = default;
+
+                // dL/dA = dC(MxN) @ B^T(NxK)
+                // Use MatMulNaiveParallelJob by treating BT as transpose(secondOperand).
+                // secondOperand is B^T, so BT is (B^T)^T = B (KxN), which is already row-major in other.Data.
                 if (this.RequiresGrad)
                 {
-                    for (int i = 0; i < M; i++)
+                    var dAJob = new MatMulNaiveParallelJob
                     {
-                        for (int k = 0; k < K; k++)
+                        A = result.Grad,   // M x N
+                        BT = other.Data,   // K x N  (acts as BT when N_out=K and K_in=N)
+                        C = Grad,          // M x K
+                        M = M,
+                        K = N,
+                        N = K,
+                        Accumulate = true
+                    };
+
+                    aHandle = dAJob.Schedule( M * K, 32 );
+                }
+
+                // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
+                // For cache friendliness, transpose A and dC so the inner loop reads contiguous memory.
+                if (other.RequiresGrad)
+                {
+                    using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
+                    using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
+                    {
+                        var tAJob = new TransposeParallelJob
                         {
-                            float grad_sum = 0f;
-                            for (int j = 0; j < N; j++)
-                            {
-                                grad_sum += result.Grad[ i * N + j ] * other.Data[ k * N + j ];
-                            }
-                            Grad[ i * K + k ] += grad_sum;
-                        }
+                            Input = Data,
+                            Output = nativeAT,
+                            Rows = M,
+                            Cols = K
+                        };
+
+                        var tDCJob = new TransposeParallelJob
+                        {
+                            Input = result.Grad,
+                            Output = nativeDCT,
+                            Rows = M,
+                            Cols = N
+                        };
+
+                        var tAHandle = tAJob.Schedule( M * K, 64, aHandle );
+                        var tDCHandle = tDCJob.Schedule( M * N, 64, aHandle );
+
+                        var dep = JobHandle.CombineDependencies( tAHandle, tDCHandle );
+
+                        var dBJob = new MatMulNaiveParallelJob
+                        {
+                            A = nativeAT,      // K x M
+                            BT = nativeDCT,    // N x M (transpose of dC)
+                            C = other.Grad,    // K x N
+                            M = K,
+                            K = M,
+                            N = N,
+                            Accumulate = true
+                        };
+
+                        dBJob.Schedule( K * N, 32, dep ).Complete();
+                        return;
                     }
                 }
 
-                // dL/dB[k,j] = sum_i dL/dC[i,j] * A[i,k]
-                if (other.RequiresGrad)
-                {
-                    for (int k = 0; k < K; k++)
-                    {
-                        for (int j = 0; j < N; j++)
-                        {
-                            float grad_sum = 0f;
-                            for (int i = 0; i < M; i++)
-                            {
-                                grad_sum += result.Grad[ i * N + j ] * Data[ i * K + k ];
-                            }
-                            other.Grad[ k * N + j ] += grad_sum;
-                        }
-                    }
-                }
+                aHandle.Complete();
             };
 
             return result;
@@ -775,15 +920,8 @@ namespace ChaosRL
             for (int i = dim; i < rank; i++)
                 newShape[ i + 1 ] = Shape[ i ];
 
-            // Create view tensor sharing data/grad
-            var result = new Tensor( newShape, new[] { this }, $"unsqueeze({dim})" );
-            result.Data = this.Data; // Share data array
-            result.Grad = this.Grad; // Share grad array
-            result.RequiresGrad = this.RequiresGrad;
-
-            // No _backward needed - gradients are shared via the same array reference
-
-            return result;
+            // Create view tensor sharing data/grad (no allocation)
+            return new Tensor( newShape, this, new[] { this }, $"unsqueeze({dim})", RequiresGrad );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -821,14 +959,8 @@ namespace ChaosRL
                 if (newShape.Length == 0)
                     newShape = new[] { 1 }; // Keep as scalar [1]
 
-                var result = new Tensor( newShape, new[] { this }, $"squeeze({d})" );
-                result.Data = this.Data; // Share data array
-                result.Grad = this.Grad; // Share grad array
-                result.RequiresGrad = this.RequiresGrad;
-
-                // No _backward needed - gradients are shared via the same array reference
-
-                return result;
+                // Create view tensor sharing data/grad (no allocation)
+                return new Tensor( newShape, this, new[] { this }, $"squeeze({d})", RequiresGrad );
             }
             else
             {
@@ -844,14 +976,8 @@ namespace ChaosRL
 
                 var newShape = newShapeList.ToArray();
 
-                var result = new Tensor( newShape, new[] { this }, "squeeze()" );
-                result.Data = this.Data; // Share data array
-                result.Grad = this.Grad; // Share grad array
-                result.RequiresGrad = this.RequiresGrad;
-
-                // No _backward needed - gradients are shared via the same array reference
-
-                return result;
+                // Create view tensor sharing data/grad (no allocation)
+                return new Tensor( newShape, this, new[] { this }, "squeeze()", RequiresGrad );
             }
         }
         //------------------------------------------------------------------
@@ -998,15 +1124,8 @@ namespace ChaosRL
                 throw new ArgumentException(
                     $"Total size must remain the same. Current size: {Size}, new size: {newSize}" );
 
-            // Create view tensor sharing data/grad
-            var result = new Tensor( newShape, new[] { this }, $"reshape({string.Join( ",", newShape )})" );
-            result.Data = this.Data; // Share data array
-            result.Grad = this.Grad; // Share grad array
-            result.RequiresGrad = this.RequiresGrad;
-
-            // No _backward needed - gradients are shared via the same array reference
-
-            return result;
+            // Create view tensor sharing data/grad (no allocation)
+            return new Tensor( newShape, this, new[] { this }, $"reshape({string.Join( ",", newShape )})", RequiresGrad );
         }
         //------------------------------------------------------------------
         private static bool CanBroadcastModulo( Tensor a, Tensor b )
@@ -1092,7 +1211,8 @@ namespace ChaosRL
 
             BuildTopo( this );
 
-            Array.Fill( Grad, 1f );
+            for (int i = 0; i < Grad.Length; i++)
+                Grad[ i ] = 1f;
 
             topo.Reverse();
             foreach (var t in topo)
@@ -1101,7 +1221,8 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public void ZeroGrad()
         {
-            Array.Clear( Grad, 0, Grad.Length );
+            for (int i = 0; i < Grad.Length; i++)
+                Grad[ i ] = 0f;
         }
         //------------------------------------------------------------------
         public override string ToString()
