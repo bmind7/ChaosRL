@@ -8,26 +8,6 @@ namespace ChaosRL
 {
     //------------------------------------------------------------------
     [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
-    public struct TransposeJob : IJob
-    {
-        [ReadOnly] public NativeArray<float> Input;
-        [WriteOnly] public NativeArray<float> Output;
-        public int Rows;
-        public int Cols;
-
-        public void Execute()
-        {
-            for (int i = 0; i < Rows; i++)
-            {
-                for (int j = 0; j < Cols; j++)
-                {
-                    Output[ j * Rows + i ] = Input[ i * Cols + j ];
-                }
-            }
-        }
-    }
-    //------------------------------------------------------------------
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
     public struct TransposeParallelJob : IJobParallelFor
     {
         [ReadOnly, NativeDisableParallelForRestriction]
