@@ -28,7 +28,7 @@ namespace ChaosRL
         public bool RequiresGrad { get; set; }
 
         private Action _backward;
-        private bool _ownsStorage;
+        private readonly bool _ownsStorage;
         private bool _disposed;
         //------------------------------------------------------------------
         public float this[ params int[] indices ]

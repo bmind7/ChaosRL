@@ -39,8 +39,8 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 ### 🧠 Roadmap
 - ~~Tensor class with better data layout~~ (**200x-400x** speedup of MatMul)
 - ~~Backend with vectorized ops (CPU)~~ (**50x** speedup)
-- ~~Multithreading** support for simulation and training~~ (**8x** speedup)
-- **K-Blocking** support for MatMul with fused Mult + Add operations (that hould close the gap with PyTorch)
+- ~~Multithreading support for simulation and training~~ (**8x** speedup)
+- **K-Blocking** support for MatMul with fused Mult + Add operations (that should close the gap with PyTorch)
 - Refactor agent code to support batching during inference
 - **Compute shader** backend (GPU)
 - Core plumbing: Agents, Academy, Save/Load, Configs, Telemetry
