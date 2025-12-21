@@ -13,7 +13,7 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 - Simple **continuous control task** – tilt a panel to keep a ball centered  
 - **Autodiff engine** (scalar-based, tensor-based, dynamic graph)  
 - **PPO** implementation with entropy bonus, value function, clipping, etc.  
-- All code runs in **Unity / C#**, single-threaded  
+- All code runs in **Unity / C# / Burst** 
 
 ---
 
