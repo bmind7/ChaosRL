@@ -2,7 +2,7 @@
 
 A small experiment where an agent learns to balance a ball on a tilting platform.
 
-Built mostly for fun and education — no external ML frameworks, and no performance optimization yet.  
+Built mostly for fun and education — no external ML frameworks.  
 Everything runs on top of a custom **autodiff engine** and a **minimal PPO implementation** written from scratch in C#.
 
 ![training preview](screenshot.gif)
