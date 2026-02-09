@@ -4,6 +4,7 @@ using System.Text;
 
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Profiling;
@@ -36,6 +37,7 @@ namespace ChaosRL
 
         private static readonly bool UseLegacyNaiveMatMulKernel = false;
         private const int LargeMatMulThreshold = 32;
+        private const int GebpMatMulThreshold = 16;
         private const int MinScheduleBatch = 1;
 
         private static readonly ProfilerMarker sMatMulTransposeTimeMarker = new ProfilerMarker( "ChaosRL.MatMul.transpose_time" );
@@ -576,6 +578,38 @@ namespace ChaosRL
         }
         //------------------------------------------------------------------
         /// <summary>
+        /// Schedules a GEBP MatMul: C(m×n) = A(m×k) @ B(k×n).
+        /// B must be in ORIGINAL row-major layout (NOT transposed).
+        /// Uses explicit FMA intrinsics for near-optimal throughput.
+        /// </summary>
+        private static JobHandle ScheduleGebpMatMul(
+            NativeArray<float> a,
+            NativeArray<float> b,
+            NativeArray<float> c,
+            int m,
+            int k,
+            int n,
+            bool accumulate,
+            JobHandle dependsOn = default )
+        {
+            int rowGroups = (m + MatMulGebpParallelJob.MR - 1) / MatMulGebpParallelJob.MR;
+
+            var gebpJob = new MatMulGebpParallelJob
+            {
+                A = a,
+                B = b,
+                C = c,
+                M = m,
+                K = k,
+                N = n,
+                Accumulate = accumulate
+            };
+
+            int batch = GetBatchSize( rowGroups );
+            return gebpJob.Schedule( rowGroups, batch, dependsOn );
+        }
+        //------------------------------------------------------------------
+        /// <summary>
         /// Matrix multiplication: (M×K) @ (K×N) -> (M×N)
         /// Supports 2D tensors for now.
         /// </summary>
@@ -595,29 +629,53 @@ namespace ChaosRL
             var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
 
             // Forward pass:
-            // 1) transpose B into BT (N x K) for contiguous inner-loop reads
-            // 2) run MatMul kernel selected by size dispatch (row or blocked)
-            using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
-            {
-                JobHandle transposeHandle;
-                using (sMatMulTransposeTimeMarker.Auto())
-                {
-                    transposeHandle = ScheduleTranspose( other.Data, nativeBT, K, N );
-                }
+            // Use GEBP FMA kernel when matrix is large enough — reads B in original
+            // K×N layout, eliminating the separate transpose step entirely.
+            bool useGebp = M >= GebpMatMulThreshold &&
+                           K >= GebpMatMulThreshold &&
+                           N >= GebpMatMulThreshold;
 
+            if (useGebp)
+            {
                 using (sMatMulGemmTimeMarker.Auto())
                 {
-                    var mmHandle = ScheduleMatMul(
+                    var mmHandle = ScheduleGebpMatMul(
                         Data,
-                        nativeBT,
+                        other.Data,
                         result.Data,
                         M,
                         K,
                         N,
-                        accumulate: false,
-                        dependsOn: transposeHandle );
+                        accumulate: false );
 
                     mmHandle.Complete();
+                }
+            }
+            else
+            {
+                // Small matrix path: transpose B then use row/blocked kernel
+                using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
+                {
+                    JobHandle transposeHandle;
+                    using (sMatMulTransposeTimeMarker.Auto())
+                    {
+                        transposeHandle = ScheduleTranspose( other.Data, nativeBT, K, N );
+                    }
+
+                    using (sMatMulGemmTimeMarker.Auto())
+                    {
+                        var mmHandle = ScheduleMatMul(
+                            Data,
+                            nativeBT,
+                            result.Data,
+                            M,
+                            K,
+                            N,
+                            accumulate: false,
+                            dependsOn: transposeHandle );
+
+                        mmHandle.Complete();
+                    }
                 }
             }
 
@@ -628,69 +686,110 @@ namespace ChaosRL
             // Backward pass
             result._backward = () =>
             {
-                JobHandle dAHandle = default;
-                bool dAScheduled = false;
-
-                // dL/dA = dC(MxN) @ B^T(NxK)
-                // Use ScheduleMatMul by treating BT as transpose(secondOperand).
-                // secondOperand is B^T, so BT is (B^T)^T = B (KxN), which is already row-major in other.Data.
-                if (this.RequiresGrad)
+                if (useGebp)
                 {
-                    using (sMatMulBackwardDATimeMarker.Auto())
-                    {
-                        dAHandle = ScheduleMatMul(
-                            result.Grad, // M x N
-                            other.Data,  // K x N (transpose of B^T)
-                            Grad,        // M x K
-                            M,
-                            N,
-                            K,
-                            accumulate: true );
-                        dAScheduled = true;
-                    }
-                }
+                    // GEBP backward: schedule dA and dB transposes + matmuls concurrently
+                    JobHandle dAHandle = default, dBHandle = default;
+                    NativeArray<float> tempBT = default, tempAT = default;
+                    bool hasDa = false, hasDb = false;
 
-                // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
-                // For cache friendliness, transpose A and dC so the inner loop reads contiguous memory.
-                if (other.RequiresGrad)
-                {
-                    using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
-                    using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
+                    // dL/dA = dC(MxN) @ B^T(NxK) => (MxK)
+                    if (this.RequiresGrad)
                     {
-                        JobHandle tAHandle;
-                        JobHandle tDCHandle;
-                        using (sMatMulTransposeTimeMarker.Auto())
+                        using (sMatMulBackwardDATimeMarker.Auto())
                         {
-                            tAHandle = ScheduleTranspose( Data, nativeAT, M, K );
-                            tDCHandle = ScheduleTranspose( result.Grad, nativeDCT, M, N );
+                            tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
+                            var tBH = ScheduleTranspose( other.Data, tempBT, K, N );
+                            dAHandle = ScheduleGebpMatMul(
+                                result.Grad, tempBT, Grad,
+                                M, N, K,
+                                accumulate: true,
+                                dependsOn: tBH );
+                            hasDa = true;
                         }
+                    }
 
-                        JobHandle dBHandle;
+                    // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
+                    // dC is already MxN row-major — no transpose needed!
+                    if (other.RequiresGrad)
+                    {
                         using (sMatMulBackwardDBTimeMarker.Auto())
                         {
-                            var dBDeps = JobHandle.CombineDependencies( tAHandle, tDCHandle );
-                            dBHandle = ScheduleMatMul(
-                                nativeAT,   // K x M
-                                nativeDCT,  // N x M (transpose of dC)
-                                other.Grad, // K x N
-                                K,
-                                M,
-                                N,
+                            tempAT = new NativeArray<float>( Size, Allocator.TempJob );
+                            var tAH = ScheduleTranspose( Data, tempAT, M, K );
+                            dBHandle = ScheduleGebpMatMul(
+                                tempAT, result.Grad, other.Grad,
+                                K, M, N,
                                 accumulate: true,
-                                dependsOn: dBDeps );
+                                dependsOn: tAH );
+                            hasDb = true;
                         }
-
-                        if (dAScheduled)
-                            JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
-                        else
-                            dBHandle.Complete();
-
-                        return;
                     }
-                }
 
-                if (dAScheduled)
-                    dAHandle.Complete();
+                    // Wait for both to complete concurrently
+                    if (hasDa && hasDb)
+                        JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
+                    else if (hasDa)
+                        dAHandle.Complete();
+                    else if (hasDb)
+                        dBHandle.Complete();
+
+                    // Dispose temp buffers
+                    if (tempBT.IsCreated) tempBT.Dispose();
+                    if (tempAT.IsCreated) tempAT.Dispose();
+                }
+                else
+                {
+                    // Small matrix backward path (original BT-based approach)
+                    JobHandle dAHandle = default;
+                    bool dAScheduled = false;
+
+                    if (this.RequiresGrad)
+                    {
+                        using (sMatMulBackwardDATimeMarker.Auto())
+                        {
+                            dAHandle = ScheduleMatMul(
+                                result.Grad, other.Data, Grad,
+                                M, N, K,
+                                accumulate: true );
+                            dAScheduled = true;
+                        }
+                    }
+
+                    if (other.RequiresGrad)
+                    {
+                        using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
+                        using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
+                        {
+                            JobHandle tAHandle, tDCHandle;
+                            using (sMatMulTransposeTimeMarker.Auto())
+                            {
+                                tAHandle = ScheduleTranspose( Data, nativeAT, M, K );
+                                tDCHandle = ScheduleTranspose( result.Grad, nativeDCT, M, N );
+                            }
+
+                            JobHandle dBHandle;
+                            using (sMatMulBackwardDBTimeMarker.Auto())
+                            {
+                                var dBDeps = JobHandle.CombineDependencies( tAHandle, tDCHandle );
+                                dBHandle = ScheduleMatMul(
+                                    nativeAT, nativeDCT, other.Grad,
+                                    K, M, N,
+                                    accumulate: true,
+                                    dependsOn: dBDeps );
+                            }
+
+                            if (dAScheduled)
+                                JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
+                            else
+                                dBHandle.Complete();
+                            return;
+                        }
+                    }
+
+                    if (dAScheduled)
+                        dAHandle.Complete();
+                }
             };
 
             return result;
