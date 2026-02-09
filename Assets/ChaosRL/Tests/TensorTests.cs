@@ -1145,6 +1145,182 @@ namespace ChaosRL.Tests
             Assert.That( weights.Grad[ 0 ], Is.Not.EqualTo( 0.0f ).Or.EqualTo( 0.0f ) );
         }
         //------------------------------------------------------------------
+        [Test, Explicit( "Heavy odd-shape tail correctness test" )]
+        public void MatMul_OddShape_513x769_769x257_ComputesConstantOutput()
+        {
+            const int M = 513, K = 769, N = 257;
+
+            var a = new Tensor( new[] { M, K } );
+            var b = new Tensor( new[] { K, N } );
+
+            for (int i = 0; i < a.Size; i++)
+                a.Data[ i ] = 1f;
+            for (int i = 0; i < b.Size; i++)
+                b.Data[ i ] = 1f;
+
+            var c = a.MatMul( b );
+
+            Assert.That( c.Shape, Is.EqualTo( new[] { M, N } ) );
+            Assert.That( c[ 0, 0 ], Is.EqualTo( (float)K ).Within( 1e-5 ) );
+            Assert.That( c[ 0, N - 1 ], Is.EqualTo( (float)K ).Within( 1e-5 ) );
+            Assert.That( c[ M - 1, 0 ], Is.EqualTo( (float)K ).Within( 1e-5 ) );
+            Assert.That( c[ M - 1, N - 1 ], Is.EqualTo( (float)K ).Within( 1e-5 ) );
+            Assert.That( c[ M / 2, N / 2 ], Is.EqualTo( (float)K ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy odd-shape tail correctness test" )]
+        public void MatMul_OddShape_1025x511_511x1023_ComputesConstantOutput()
+        {
+            const int M = 1025, K = 511, N = 1023;
+
+            var a = new Tensor( new[] { M, K } );
+            var b = new Tensor( new[] { K, N } );
+
+            for (int i = 0; i < a.Size; i++)
+                a.Data[ i ] = 1f;
+            for (int i = 0; i < b.Size; i++)
+                b.Data[ i ] = 2f;
+
+            var c = a.MatMul( b );
+            float expected = K * 2f;
+
+            Assert.That( c.Shape, Is.EqualTo( new[] { M, N } ) );
+            Assert.That( c[ 0, 0 ], Is.EqualTo( expected ).Within( 1e-5 ) );
+            Assert.That( c[ 0, N - 1 ], Is.EqualTo( expected ).Within( 1e-5 ) );
+            Assert.That( c[ M - 1, 0 ], Is.EqualTo( expected ).Within( 1e-5 ) );
+            Assert.That( c[ M - 1, N - 1 ], Is.EqualTo( expected ).Within( 1e-5 ) );
+            Assert.That( c[ M / 2, N / 2 ], Is.EqualTo( expected ).Within( 1e-5 ) );
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void MatMul_Backward_OddShape_33x65_65x17_MatchesAnalyticalGradients()
+        {
+            const int M = 33, K = 65, N = 17;
+
+            var aData = new float[ M * K ];
+            var bData = new float[ K * N ];
+
+            for (int i = 0; i < aData.Length; i++)
+                aData[ i ] = (i % 11) * 0.07f - 0.2f;
+            for (int i = 0; i < bData.Length; i++)
+                bData[ i ] = ((i * 3) % 13) * 0.05f - 0.15f;
+
+            var a = new Tensor( new[] { M, K }, aData );
+            var b = new Tensor( new[] { K, N }, bData );
+
+            var c = a.MatMul( b );
+            c.Backward();
+
+            // With c.Backward(), dC is all ones.
+            // dA = ones(MxN) @ B^T => for each k: sum_j B[k,j], repeated across rows.
+            var bRowSums = new float[ K ];
+            for (int k = 0; k < K; k++)
+            {
+                float sum = 0f;
+                for (int j = 0; j < N; j++)
+                    sum += bData[ k * N + j ];
+                bRowSums[ k ] = sum;
+            }
+
+            for (int i = 0; i < M; i++)
+            {
+                for (int k = 0; k < K; k++)
+                {
+                    int idx = i * K + k;
+                    Assert.That( a.Grad[ idx ], Is.EqualTo( bRowSums[ k ] ).Within( 1e-5 ),
+                        $"dA mismatch at ({i},{k})" );
+                }
+            }
+
+            // dB = A^T @ ones(MxN) => for each k: sum_i A[i,k], repeated across columns.
+            var aColSums = new float[ K ];
+            for (int k = 0; k < K; k++)
+            {
+                float sum = 0f;
+                for (int i = 0; i < M; i++)
+                    sum += aData[ i * K + k ];
+                aColSums[ k ] = sum;
+            }
+
+            for (int k = 0; k < K; k++)
+            {
+                for (int j = 0; j < N; j++)
+                {
+                    int idx = k * N + j;
+                    Assert.That( b.Grad[ idx ], Is.EqualTo( aColSums[ k ] ).Within( 1e-5 ),
+                        $"dB mismatch at ({k},{j})" );
+                }
+            }
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void MatMul_Backward_AccumulatesForSharedTensorAcrossMultipleMatMuls()
+        {
+            const int M = 7, K = 11, N = 5;
+
+            var aData = new float[ M * K ];
+            var b1Data = new float[ K * N ];
+            var b2Data = new float[ K * N ];
+
+            for (int i = 0; i < aData.Length; i++)
+                aData[ i ] = (i % 7) * 0.2f - 0.3f;
+            for (int i = 0; i < b1Data.Length; i++)
+                b1Data[ i ] = (i % 5) * 0.1f - 0.2f;
+            for (int i = 0; i < b2Data.Length; i++)
+                b2Data[ i ] = ((i + 3) % 5) * 0.12f - 0.1f;
+
+            var a = new Tensor( new[] { M, K }, aData );
+            var b1 = new Tensor( new[] { K, N }, b1Data );
+            var b2 = new Tensor( new[] { K, N }, b2Data );
+
+            var loss = a.MatMul( b1 ).Sum() + a.MatMul( b2 ).Sum();
+            loss.Backward();
+
+            var bCombinedRowSums = new float[ K ];
+            for (int k = 0; k < K; k++)
+            {
+                float sum1 = 0f;
+                float sum2 = 0f;
+                for (int j = 0; j < N; j++)
+                {
+                    sum1 += b1Data[ k * N + j ];
+                    sum2 += b2Data[ k * N + j ];
+                }
+                bCombinedRowSums[ k ] = sum1 + sum2;
+            }
+
+            for (int i = 0; i < M; i++)
+            {
+                for (int k = 0; k < K; k++)
+                {
+                    int idx = i * K + k;
+                    Assert.That( a.Grad[ idx ], Is.EqualTo( bCombinedRowSums[ k ] ).Within( 1e-5 ),
+                        $"Accumulated dA mismatch at ({i},{k})" );
+                }
+            }
+
+            var aColSums = new float[ K ];
+            for (int k = 0; k < K; k++)
+            {
+                float sum = 0f;
+                for (int i = 0; i < M; i++)
+                    sum += aData[ i * K + k ];
+                aColSums[ k ] = sum;
+            }
+
+            for (int k = 0; k < K; k++)
+            {
+                for (int j = 0; j < N; j++)
+                {
+                    int idx = k * N + j;
+                    Assert.That( b1.Grad[ idx ], Is.EqualTo( aColSums[ k ] ).Within( 1e-5 ),
+                        $"dB1 mismatch at ({k},{j})" );
+                    Assert.That( b2.Grad[ idx ], Is.EqualTo( aColSums[ k ] ).Within( 1e-5 ),
+                        $"dB2 mismatch at ({k},{j})" );
+                }
+            }
+        }
+        //------------------------------------------------------------------
         [Test]
         public void Sum_AllDimensions_ComputesCorrectly()
         {

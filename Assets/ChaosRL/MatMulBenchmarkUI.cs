@@ -45,8 +45,20 @@ namespace ChaosRL
             sb.AppendLine( $"Benchmark started at {DateTime.Now}" );
             sb.AppendLine();
 
-            // Define sizes to benchmark
-            int[] sizes = { 64, 128, 256, 512, 1024, 2048 };
+            // Include square, odd power, and mixed aspect-ratio shapes.
+            var shapes = new (int M, int K, int N)[]
+            {
+                (64, 64, 64),
+                (128, 128, 128),
+                (256, 256, 256),
+                (512, 512, 512),
+                (768, 768, 768),
+                (1024, 1024, 1024),
+                (1536, 1536, 1536),
+                (2048, 2048, 2048),
+                (1024, 2048, 1024),
+                (2048, 1024, 2048),
+            };
 
             sb.AppendLine( "CPU Results (MatMul Only):" );
             sb.AppendLine( new string( '-', 80 ) );
@@ -55,9 +67,9 @@ namespace ChaosRL
             _benchmarkResults = sb.ToString();
             yield return null;
 
-            foreach (var size in sizes)
+            foreach (var shape in shapes)
             {
-                RunTensorMatMulOnly( size, size, size, sb );
+                RunTensorMatMulOnly( shape.M, shape.K, shape.N, sb );
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }
@@ -71,9 +83,9 @@ namespace ChaosRL
             _benchmarkResults = sb.ToString();
             yield return null;
 
-            foreach (var size in sizes)
+            foreach (var shape in shapes)
             {
-                RunTensorMatMulWithBackward( size, size, size, sb );
+                RunTensorMatMulWithBackward( shape.M, shape.K, shape.N, sb );
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }

@@ -207,6 +207,30 @@ namespace ChaosRL.Tests
             BenchmarkTensorMatMulOnly( 512, 512, 512 );
         }
         //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMul_768x768x768()
+        {
+            BenchmarkTensorMatMulOnly( 768, 768, 768 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMul_1536x1536x1536()
+        {
+            BenchmarkTensorMatMulOnly( 1536, 1536, 1536 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMul_1024x2048_2048x1024()
+        {
+            BenchmarkTensorMatMulOnly( 1024, 2048, 1024 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMul_2048x1024_1024x2048()
+        {
+            BenchmarkTensorMatMulOnly( 2048, 1024, 2048 );
+        }
+        //------------------------------------------------------------------
         // [Test]
         // public void Benchmark_TensorMatMul_1024x1024x1024()
         // {
@@ -244,6 +268,30 @@ namespace ChaosRL.Tests
         public void Benchmark_TensorMatMulBackward_512x512x512()
         {
             BenchmarkTensorMatMulWithBackward( 512, 512, 512 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMulBackward_768x768x768()
+        {
+            BenchmarkTensorMatMulWithBackward( 768, 768, 768 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMulBackward_1536x1536x1536()
+        {
+            BenchmarkTensorMatMulWithBackward( 1536, 1536, 1536 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMulBackward_1024x2048_2048x1024()
+        {
+            BenchmarkTensorMatMulWithBackward( 1024, 2048, 1024 );
+        }
+        //------------------------------------------------------------------
+        [Test, Explicit( "Heavy benchmark - run manually" )]
+        public void Benchmark_TensorMatMulBackward_2048x1024_1024x2048()
+        {
+            BenchmarkTensorMatMulWithBackward( 2048, 1024, 2048 );
         }
         //------------------------------------------------------------------
         // [Test]
