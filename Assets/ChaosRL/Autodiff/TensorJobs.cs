@@ -348,12 +348,12 @@ namespace ChaosRL
                     float* aRow = pA + row * K;
                     float sum = 0f;
                     for (int k = 0; k < K; k++)
-                        sum += aRow[k] * pB[k * N + j];
+                        sum += aRow[ k ] * pB[ k * N + j ];
                     int cIdx = row * N + j;
                     if (Accumulate)
-                        pC[cIdx] += sum;
+                        pC[ cIdx ] += sum;
                     else
-                        pC[cIdx] = sum;
+                        pC[ cIdx ] = sum;
                 }
             }
         }
@@ -389,27 +389,27 @@ namespace ChaosRL
 
                 v256 av;
 
-                av = X86.Avx.mm256_set1_ps( a0[k] );
+                av = X86.Avx.mm256_set1_ps( a0[ k ] );
                 c00 = X86.Fma.mm256_fmadd_ps( av, b0, c00 );
                 c01 = X86.Fma.mm256_fmadd_ps( av, b1, c01 );
 
-                av = X86.Avx.mm256_set1_ps( a1[k] );
+                av = X86.Avx.mm256_set1_ps( a1[ k ] );
                 c10 = X86.Fma.mm256_fmadd_ps( av, b0, c10 );
                 c11 = X86.Fma.mm256_fmadd_ps( av, b1, c11 );
 
-                av = X86.Avx.mm256_set1_ps( a2[k] );
+                av = X86.Avx.mm256_set1_ps( a2[ k ] );
                 c20 = X86.Fma.mm256_fmadd_ps( av, b0, c20 );
                 c21 = X86.Fma.mm256_fmadd_ps( av, b1, c21 );
 
-                av = X86.Avx.mm256_set1_ps( a3[k] );
+                av = X86.Avx.mm256_set1_ps( a3[ k ] );
                 c30 = X86.Fma.mm256_fmadd_ps( av, b0, c30 );
                 c31 = X86.Fma.mm256_fmadd_ps( av, b1, c31 );
 
-                av = X86.Avx.mm256_set1_ps( a4[k] );
+                av = X86.Avx.mm256_set1_ps( a4[ k ] );
                 c40 = X86.Fma.mm256_fmadd_ps( av, b0, c40 );
                 c41 = X86.Fma.mm256_fmadd_ps( av, b1, c41 );
 
-                av = X86.Avx.mm256_set1_ps( a5[k] );
+                av = X86.Avx.mm256_set1_ps( a5[ k ] );
                 c50 = X86.Fma.mm256_fmadd_ps( av, b0, c50 );
                 c51 = X86.Fma.mm256_fmadd_ps( av, b1, c51 );
             }
@@ -433,10 +433,10 @@ namespace ChaosRL
             if (!X86.Fma.IsFmaSupported) return;
 
             // stackalloc accumulator: up to MR × 2 v256 (6 × 2 = 12 v256 = 384 bytes)
-            float* accum = stackalloc float[MR * NR];
+            float* accum = stackalloc float[ MR * NR ];
 
             for (int i = 0; i < MR * NR; i++)
-                accum[i] = 0f;
+                accum[ i ] = 0f;
 
             for (int k = 0; k < K; k++)
             {
@@ -446,7 +446,7 @@ namespace ChaosRL
 
                 for (int ii = 0; ii < rowCount; ii++)
                 {
-                    v256 av = X86.Avx.mm256_set1_ps( pA[(rowStart + ii) * K + k] );
+                    v256 av = X86.Avx.mm256_set1_ps( pA[ (rowStart + ii) * K + k ] );
                     float* acc = accum + ii * NR;
 
                     v256 a0 = X86.Avx.mm256_loadu_ps( acc );
@@ -482,16 +482,16 @@ namespace ChaosRL
                                              int rowStart, int rowCount, int colStart )
         {
             // Up to MR v128 accumulators
-            float* accum = stackalloc float[MR * 4];
+            float* accum = stackalloc float[ MR * 4 ];
             for (int i = 0; i < MR * 4; i++)
-                accum[i] = 0f;
+                accum[ i ] = 0f;
 
             for (int k = 0; k < K; k++)
             {
                 v128 bv = X86.Sse.loadu_ps( pB + k * N + colStart );
                 for (int ii = 0; ii < rowCount; ii++)
                 {
-                    v128 av = X86.Sse.set1_ps( pA[(rowStart + ii) * K + k] );
+                    v128 av = X86.Sse.set1_ps( pA[ (rowStart + ii) * K + k ] );
                     float* acc = accum + ii * 4;
                     v128 cv = X86.Sse.loadu_ps( acc );
                     cv = X86.Sse.add_ps( cv, X86.Sse.mul_ps( av, bv ) );
