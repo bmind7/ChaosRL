@@ -26,7 +26,7 @@ namespace ChaosRL
         [SerializeField] private float _learningRate = 2e-5f;
         [SerializeField] private float _l2Coef = 1e-4f;
         [SerializeField] private int[] _hiddenLayers = new int[] { 64, 64 };
-        // Offset added to log-std to output to avoid too high std values
+        // Offset added to log-std output to avoid too high std values
         [SerializeField] private float _logStdOffset = 0.6f;
 
         [Header( "Agent Config" )]
@@ -39,7 +39,7 @@ namespace ChaosRL
         private AdamOptimizer _optimizer;
         private L2Regularizer _l2Regularizer;
 
-        // --- Experience Replay Buffers ---
+        // --- Rollout Buffers (on-policy) ---
         private int _bufferSize;
         private int _currentStep = 0;
         private int _bufferIdx = 0;
@@ -64,7 +64,7 @@ namespace ChaosRL
 
             Debug.Log( "Academy started." );
 
-            // --- To insure consisten simullation even durin frame drops while Networks are updating
+            // --- To ensure consistent simulation even during frame drops while networks are updating
             Application.targetFrameRate = 60;
             Time.captureFramerate = 60;
 
@@ -105,7 +105,7 @@ namespace ChaosRL
             var val = _valueNetwork.Forward( obs );
             var outputActions = new float[ _actionSize ];
 
-            // Sample Action Policy (Gaussian policy): 
+            // Sample an action from the policy (Gaussian policy):
             // mean from first half, log-std from second half of network output
 
             var mean = policyOutput.Slice( 1, 0, _actionSize );
@@ -114,7 +114,7 @@ namespace ChaosRL
             var dist = new Dist( mean, std );
             var action = dist.Sample();
 
-            // Clipped action only send to environment
+            // Send a clipped action to the environment
             for (int i = 0; i < _actionSize; i++)
             {
                 // always take first raw because batch size is 1
@@ -156,7 +156,7 @@ namespace ChaosRL
             {
                 float gae = 0f;
 
-                // Start from the element before last so the last slot is only used for bootstrapping
+                // Start from the second-to-last element so the last slot is only used for bootstrapping
                 for (int t = T - 2; t >= 0; t--)
                 {
                     float reward = _rewardBuffer[ t, env ];
@@ -169,7 +169,7 @@ namespace ChaosRL
                     gae = delta + _gamma * _gaeLambda * nonTerminal * gae;
 
                     advantages[ t, env ] = gae;
-                    // Removes predicted value from advantages to get full return from environment
+                   // Add predicted value to advantages to get the full return
                     returns[ t, env ] = gae + value;
                 }
             }
@@ -185,7 +185,7 @@ namespace ChaosRL
             int trimBatchSize = _bufferSize - 1;
             int totalElements = trimBatchSize * _numEnvs;
 
-            // Flatten time and env dimensions for minibatch sampling (just slice - data already contiguous)
+            // Flatten time and env dimensions for minibatch sampling (just slice, data already contiguous)
             var batch_observations = _observationBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, _inputSize } );
             var batch_actions = _actionBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, _actionSize } );
             var batch_log_probs = _logProbBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
@@ -193,7 +193,7 @@ namespace ChaosRL
             var batch_returns = returns.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
             var batch_doneFlags = _doneBuffer.Slice( 0, 0, trimBatchSize ).Reshape( new[] { totalElements, 1 } );
 
-            // // Normalize advantages to keep the policy gradient scale well behaved
+            // Normalize advantages to keep the policy gradient scale well behaved
             batch_advantages = batch_advantages.Normalize().Reshape( new[] { totalElements, 1 } );
 
             int[] indices = Enumerable.Range( 0, totalElements ).ToArray();
