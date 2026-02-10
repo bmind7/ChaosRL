@@ -580,7 +580,9 @@ namespace ChaosRL
         /// <summary>
         /// Schedules a GEBP MatMul: C(m×n) = A(m×k) @ B(k×n).
         /// B must be in ORIGINAL row-major layout (NOT transposed).
-        /// Uses explicit FMA intrinsics for near-optimal throughput.
+        /// Packs B into column-panel layout once, then runs FMA micro-kernels
+        /// that read the packed buffer sequentially for full L1 throughput.
+        /// The packed buffer is auto-disposed when the returned handle completes.
         /// </summary>
         private static JobHandle ScheduleGebpMatMul(
             NativeArray<float> a,
@@ -592,21 +594,40 @@ namespace ChaosRL
             bool accumulate,
             JobHandle dependsOn = default )
         {
-            int rowGroups = (m + MatMulGebpParallelJob.MR - 1) / MatMulGebpParallelJob.MR;
+            const int NR = MatMulGebpParallelJob.NR;
+            int numPanels = (n + NR - 1) / NR;
+            int packedSize = numPanels * k * NR;
 
+            var packedB = new NativeArray<float>( packedSize, Allocator.TempJob );
+
+            // Phase 1: Pack B into column-panel layout (parallel over panels)
+            var packJob = new PackBPanelParallelJob
+            {
+                B = b,
+                PackedB = packedB,
+                K = k,
+                N = n
+            };
+            int packBatch = GetBatchSize( numPanels );
+            var packHandle = packJob.Schedule( numPanels, packBatch, dependsOn );
+
+            // Phase 2: GEBP micro-kernels read from packed B (parallel over row-groups)
+            int rowGroups = (m + MatMulGebpParallelJob.MR - 1) / MatMulGebpParallelJob.MR;
             var gebpJob = new MatMulGebpParallelJob
             {
                 A = a,
-                B = b,
+                PackedB = packedB,
                 C = c,
                 M = m,
                 K = k,
                 N = n,
                 Accumulate = accumulate
             };
-
             int batch = GetBatchSize( rowGroups );
-            return gebpJob.Schedule( rowGroups, batch, dependsOn );
+            var gebpHandle = gebpJob.Schedule( rowGroups, batch, packHandle );
+
+            // Auto-dispose packed buffer after GEBP completes
+            return packedB.Dispose( gebpHandle );
         }
         //------------------------------------------------------------------
         /// <summary>

@@ -267,13 +267,82 @@ namespace ChaosRL
     }
     //------------------------------------------------------------------
     /// <summary>
+    /// Packs B(K×N) into column-panel layout for cache-friendly micro-kernel access.
+    /// Packed layout: panel[jp] contains K rows of NR consecutive columns.
+    /// Storage: PackedB[jp * K * NR + k * NR + jr] = B[k, jp*NR + jr].
+    /// Last panel is zero-padded if N is not divisible by NR.
+    /// Parallelized over column panels.
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct PackBPanelParallelJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> B;  // K × N row-major
+
+        [WriteOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> PackedB;  // numPanels × K × NR
+
+        public int K, N;
+
+        [SkipLocalsInit]
+        public unsafe void Execute( int panelIndex )
+        {
+            const int NR = MatMulGebpParallelJob.NR;
+            int colStart = panelIndex * NR;
+            int colCount = math.min( NR, N - colStart );
+
+            float* pB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( B );
+            float* dst = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( PackedB )
+                         + panelIndex * K * NR;
+
+            if (colCount == NR)
+            {
+                if (X86.Avx.IsAvxSupported)
+                {
+                    for (int k = 0; k < K; k++)
+                    {
+                        float* src = pB + k * N + colStart;
+                        float* d = dst + k * NR;
+                        X86.Avx.mm256_storeu_ps( d, X86.Avx.mm256_loadu_ps( src ) );
+                        X86.Avx.mm256_storeu_ps( d + 8, X86.Avx.mm256_loadu_ps( src + 8 ) );
+                    }
+                }
+                else
+                {
+                    for (int k = 0; k < K; k++)
+                    {
+                        float* src = pB + k * N + colStart;
+                        float* d = dst + k * NR;
+                        for (int jr = 0; jr < NR; jr++)
+                            d[ jr ] = src[ jr ];
+                    }
+                }
+            }
+            else
+            {
+                // Partial panel: copy valid columns, zero-pad rest
+                for (int k = 0; k < K; k++)
+                {
+                    float* src = pB + k * N + colStart;
+                    float* d = dst + k * NR;
+                    int jr = 0;
+                    for (; jr < colCount; jr++)
+                        d[ jr ] = src[ jr ];
+                    for (; jr < NR; jr++)
+                        d[ jr ] = 0f;
+                }
+            }
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>
     /// High-performance GEBP MatMul using explicit FMA intrinsics:
-    /// C(M×N) = A(M×K) @ B(K×N)  -- B is in ORIGINAL row-major layout (NOT transposed).
+    /// C(M×N) = A(M×K) @ B(K×N)  with B pre-packed into column-panel layout.
     ///
-    /// Key difference from other kernels: takes B in K×N layout, vectorizes over
-    /// output columns (N dimension) using AVX FMA, broadcasting A elements.
-    /// This avoids the separate transpose step entirely and achieves near-optimal
-    /// FMA throughput with a 6×16 micro-kernel (12 v256 accumulators).
+    /// Reads PackedB in sequential NR-stride access (64 bytes = 1 cache line),
+    /// achieving full L1 throughput regardless of original N.
+    /// Uses a 6×16 FMA micro-kernel (12 v256 accumulators).
     ///
     /// Parallelized over row-groups of MR=6 rows each.
     /// Falls back to SSE (4-wide) then scalar for CPUs without AVX/FMA.
@@ -288,13 +357,13 @@ namespace ChaosRL
         public const int NR = 16;
 
         [ReadOnly, NativeDisableParallelForRestriction]
-        public NativeArray<float> A;  // M × K  row-major
+        public NativeArray<float> A;       // M × K  row-major
 
         [ReadOnly, NativeDisableParallelForRestriction]
-        public NativeArray<float> B;  // K × N  row-major (NOT transposed!)
+        public NativeArray<float> PackedB; // numPanels × K × NR, panel-packed
 
         [NativeDisableParallelForRestriction]
-        public NativeArray<float> C;  // M × N  row-major
+        public NativeArray<float> C;       // M × N  row-major
 
         public int M, K, N;
         public bool Accumulate;
@@ -309,61 +378,91 @@ namespace ChaosRL
             int rowCount = math.min( MR, M - rowStart );
 
             float* pA = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( A );
-            float* pB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( B );
+            float* pPB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( PackedB );
             float* pC = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( C );
 
-            int j = 0;
+            int numPanels = (N + NR - 1) / NR;
+            int lastPanelCols = N - (numPanels - 1) * NR;
+            int fullPanels = lastPanelCols == NR ? numPanels : numPanels - 1;
 
             // ---- AVX + FMA path (256-bit, 8 floats/vec) ----
             if (X86.Fma.IsFmaSupported)
             {
-                // Full 16-wide micro-tiles
-                for (; j + NR <= N; j += NR)
+                // Full NR-wide panels
+                for (int jp = 0; jp < fullPanels; jp++)
                 {
+                    float* panel = pPB + jp * K * NR;
+                    int colStart = jp * NR;
                     if (rowCount == MR)
-                        MicroKernelFma6x16( pA, pB, pC, rowStart, j );
+                        MicroKernelFma6x16( pA, panel, pC, rowStart, colStart );
                     else
-                        MicroKernelFmaGeneric( pA, pB, pC, rowStart, rowCount, j, NR );
+                        MicroKernelFmaGeneric( pA, panel, pC, rowStart, rowCount, colStart, NR );
                 }
-                // 8-wide remainder
-                if (j + 8 <= N)
+                // Last partial panel (if N not divisible by NR)
+                if (fullPanels < numPanels)
                 {
-                    MicroKernelFmaGeneric( pA, pB, pC, rowStart, rowCount, j, 8 );
-                    j += 8;
+                    float* panel = pPB + fullPanels * K * NR;
+                    int colStart = fullPanels * NR;
+                    MicroKernelFmaGeneric( pA, panel, pC, rowStart, rowCount, colStart, lastPanelCols );
                 }
             }
             // ---- SSE fallback (128-bit, 4 floats/vec) ----
             else if (X86.Sse.IsSseSupported)
             {
-                for (; j + 4 <= N; j += 4)
-                    MicroKernelSse( pA, pB, pC, rowStart, rowCount, j );
-            }
-
-            // ---- Scalar tail for remaining columns ----
-            for (; j < N; j++)
-            {
-                for (int ii = 0; ii < rowCount; ii++)
+                for (int jp = 0; jp < numPanels; jp++)
                 {
-                    int row = rowStart + ii;
-                    float* aRow = pA + row * K;
-                    float sum = 0f;
-                    for (int k = 0; k < K; k++)
-                        sum += aRow[ k ] * pB[ k * N + j ];
-                    int cIdx = row * N + j;
-                    if (Accumulate)
-                        pC[ cIdx ] += sum;
-                    else
-                        pC[ cIdx ] = sum;
+                    float* panel = pPB + jp * K * NR;
+                    int colStart = jp * NR;
+                    int colCount = jp < fullPanels ? NR : lastPanelCols;
+                    int jLocal = 0;
+                    for (; jLocal + 4 <= colCount; jLocal += 4)
+                        MicroKernelSse( pA, panel, pC, rowStart, rowCount, colStart + jLocal, jLocal );
+                    for (; jLocal < colCount; jLocal++)
+                        ScalarColumn( pA, panel, pC, rowStart, rowCount, colStart, jLocal );
+                }
+            }
+            // ---- Pure scalar fallback ----
+            else
+            {
+                for (int jp = 0; jp < numPanels; jp++)
+                {
+                    float* panel = pPB + jp * K * NR;
+                    int colStart = jp * NR;
+                    int colCount = jp < fullPanels ? NR : lastPanelCols;
+                    for (int jLocal = 0; jLocal < colCount; jLocal++)
+                        ScalarColumn( pA, panel, pC, rowStart, rowCount, colStart, jLocal );
                 }
             }
         }
 
         //--------------------------------------------------------------
+        // Scalar helper: computes one output column within a packed panel.
+        //--------------------------------------------------------------
+        private unsafe void ScalarColumn( float* pA, float* panel, float* pC,
+                                           int rowStart, int rowCount, int colStart, int jLocal )
+        {
+            for (int ii = 0; ii < rowCount; ii++)
+            {
+                int row = rowStart + ii;
+                float* aRow = pA + row * K;
+                float sum = 0f;
+                for (int k = 0; k < K; k++)
+                    sum += aRow[ k ] * panel[ k * NR + jLocal ];
+                int cIdx = row * N + colStart + jLocal;
+                if (Accumulate)
+                    pC[ cIdx ] += sum;
+                else
+                    pC[ cIdx ] = sum;
+            }
+        }
+
+        //--------------------------------------------------------------
         // Hot path: exactly 6 rows × 16 columns (2 × v256) using FMA.
-        // 12 accumulator registers + 2 B loads + 1 A broadcast = 15 YMM regs used.
+        // 12 accumulator registers + 2 B loads + 1 A broadcast = 15 YMM regs.
+        // Reads pre-packed panel with stride NR*4 = 64 bytes (1 cache line).
         //--------------------------------------------------------------
         [SkipLocalsInit]
-        private unsafe void MicroKernelFma6x16( float* pA, float* pB, float* pC, int rowStart, int colStart )
+        private unsafe void MicroKernelFma6x16( float* pA, float* panel, float* pC, int rowStart, int colStart )
         {
             if (!X86.Fma.IsFmaSupported) return;
 
@@ -383,7 +482,7 @@ namespace ChaosRL
 
             for (int k = 0; k < K; k++)
             {
-                float* bk = pB + k * N + colStart;
+                float* bk = panel + k * NR;
                 v256 b0 = X86.Avx.mm256_loadu_ps( bk );
                 v256 b1 = X86.Avx.mm256_loadu_ps( bk + 8 );
 
@@ -423,26 +522,26 @@ namespace ChaosRL
         }
 
         //--------------------------------------------------------------
-        // Generic FMA path for partial rows or 8-wide remainder columns.
-        // nrCols must be 8 or 16.
+        // Generic FMA path for partial rows or partial column panels.
+        // Reads from pre-packed panel. Always accumulates NR-wide (zero-padded),
+        // but stores only colCount valid columns.
         //--------------------------------------------------------------
         [SkipLocalsInit]
-        private unsafe void MicroKernelFmaGeneric( float* pA, float* pB, float* pC,
-                                                    int rowStart, int rowCount, int colStart, int nrCols )
+        private unsafe void MicroKernelFmaGeneric( float* pA, float* panel, float* pC,
+                                                    int rowStart, int rowCount, int colStart, int colCount )
         {
             if (!X86.Fma.IsFmaSupported) return;
 
-            // stackalloc accumulator: up to MR × 2 v256 (6 × 2 = 12 v256 = 384 bytes)
+            // Accumulators: always NR-wide (zero-padded B ensures correctness)
             float* accum = stackalloc float[ MR * NR ];
-
             for (int i = 0; i < MR * NR; i++)
                 accum[ i ] = 0f;
 
             for (int k = 0; k < K; k++)
             {
-                float* bk = pB + k * N + colStart;
+                float* bk = panel + k * NR;
                 v256 b0 = X86.Avx.mm256_loadu_ps( bk );
-                v256 b1 = nrCols > 8 ? X86.Avx.mm256_loadu_ps( bk + 8 ) : default;
+                v256 b1 = X86.Avx.mm256_loadu_ps( bk + 8 );
 
                 for (int ii = 0; ii < rowCount; ii++)
                 {
@@ -453,33 +552,48 @@ namespace ChaosRL
                     a0 = X86.Fma.mm256_fmadd_ps( av, b0, a0 );
                     X86.Avx.mm256_storeu_ps( acc, a0 );
 
-                    if (nrCols > 8)
-                    {
-                        v256 a1 = X86.Avx.mm256_loadu_ps( acc + 8 );
-                        a1 = X86.Fma.mm256_fmadd_ps( av, b1, a1 );
-                        X86.Avx.mm256_storeu_ps( acc + 8, a1 );
-                    }
+                    v256 a1 = X86.Avx.mm256_loadu_ps( acc + 8 );
+                    a1 = X86.Fma.mm256_fmadd_ps( av, b1, a1 );
+                    X86.Avx.mm256_storeu_ps( acc + 8, a1 );
                 }
             }
 
-            // Write back from accumulator to C
+            // Write back only valid columns to C
             for (int ii = 0; ii < rowCount; ii++)
             {
                 int cBase = (rowStart + ii) * N + colStart;
                 float* acc = accum + ii * NR;
-                if (nrCols >= 16)
+                if (colCount == NR)
+                {
                     StoreFma256FromAccum( pC, cBase, acc );
-                else // nrCols == 8
+                }
+                else if (colCount >= 8)
+                {
                     StoreFma128FromAccum( pC, cBase, acc );
+                    for (int jr = 8; jr < colCount; jr++)
+                    {
+                        if (Accumulate) pC[ cBase + jr ] += acc[ jr ];
+                        else pC[ cBase + jr ] = acc[ jr ];
+                    }
+                }
+                else
+                {
+                    for (int jr = 0; jr < colCount; jr++)
+                    {
+                        if (Accumulate) pC[ cBase + jr ] += acc[ jr ];
+                        else pC[ cBase + jr ] = acc[ jr ];
+                    }
+                }
             }
         }
 
         //--------------------------------------------------------------
-        // SSE fallback: 4-wide accumulator per row
+        // SSE fallback: 4-wide accumulator per row.
+        // Reads from packed panel at offset jLocal within the NR-wide panel.
         //--------------------------------------------------------------
         [SkipLocalsInit]
-        private unsafe void MicroKernelSse( float* pA, float* pB, float* pC,
-                                             int rowStart, int rowCount, int colStart )
+        private unsafe void MicroKernelSse( float* pA, float* panel, float* pC,
+                                             int rowStart, int rowCount, int cColStart, int jLocal )
         {
             // Up to MR v128 accumulators
             float* accum = stackalloc float[ MR * 4 ];
@@ -488,7 +602,7 @@ namespace ChaosRL
 
             for (int k = 0; k < K; k++)
             {
-                v128 bv = X86.Sse.loadu_ps( pB + k * N + colStart );
+                v128 bv = X86.Sse.loadu_ps( panel + k * NR + jLocal );
                 for (int ii = 0; ii < rowCount; ii++)
                 {
                     v128 av = X86.Sse.set1_ps( pA[ (rowStart + ii) * K + k ] );
@@ -501,7 +615,7 @@ namespace ChaosRL
 
             for (int ii = 0; ii < rowCount; ii++)
             {
-                float* dst = pC + (rowStart + ii) * N + colStart;
+                float* dst = pC + (rowStart + ii) * N + cColStart;
                 float* acc = accum + ii * 4;
                 v128 cv = X86.Sse.loadu_ps( acc );
                 if (Accumulate)
