@@ -384,9 +384,9 @@ namespace ChaosRL
                 return;
             int rowCount = math.min( MR, M - rowStart );
 
-            float* pA  = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( A );
+            float* pA = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( A );
             float* pPB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( PackedB );
-            float* pC  = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( C );
+            float* pC = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( C );
 
             // Tell Burst the raw pointers don't alias each other.
             Aliasing.ExpectNotAliased( pA, pPB );
@@ -408,9 +408,9 @@ namespace ChaosRL
 
             for (int jp = 0; jp < numPanels; jp++)
             {
-                float* panel    = pPB + jp * K * NR;
-                int    colStart = jp * NR;
-                int    colCount = math.min( NR, N - colStart );
+                float* panel = pPB + jp * K * NR;
+                int colStart = jp * NR;
+                int colCount = math.min( NR, N - colStart );
 
                 // Fast zero via memset instead of scalar loop.
                 UnsafeUtility.MemClear( accum, MR * NR * sizeof( float ) );
@@ -467,8 +467,8 @@ namespace ChaosRL
                         float* bk = panel + k * NR;
                         for (int ii = 0; ii < rowCount; ii++)
                         {
-                            float  aVal = pA[ (rowStart + ii) * K + k ];
-                            float* acc  = accum + ii * NR;
+                            float aVal = pA[ (rowStart + ii) * K + k ];
+                            float* acc = accum + ii * NR;
                             for (int jr = 0; jr < NR; jr++)
                                 acc[ jr ] += aVal * bk[ jr ];
                         }
@@ -478,8 +478,8 @@ namespace ChaosRL
                 // Write back to C — only valid columns, Accumulate branch hoisted.
                 for (int ii = 0; ii < rowCount; ii++)
                 {
-                    int    cBase = (rowStart + ii) * N + colStart;
-                    float* acc   = accum + ii * NR;
+                    int cBase = (rowStart + ii) * N + colStart;
+                    float* acc = accum + ii * NR;
 
                     if (Accumulate)
                     {
