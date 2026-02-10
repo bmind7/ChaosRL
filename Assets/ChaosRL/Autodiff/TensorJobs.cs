@@ -9,7 +9,8 @@ using Unity.Mathematics;
 namespace ChaosRL
 {
     //------------------------------------------------------------------
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct TransposeParallelJob : IJobParallelFor
     {
         [ReadOnly, NativeDisableParallelForRestriction]
@@ -33,7 +34,7 @@ namespace ChaosRL
     /// Output(Cols x Rows) = Input(Rows x Cols)
     /// Parallelized over tiles rather than individual elements.
     /// </summary>
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard,
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
                    DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct TransposeTiledParallelJob : IJobParallelFor
     {
@@ -70,7 +71,8 @@ namespace ChaosRL
         }
     }
     //------------------------------------------------------------------
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct MatMulJob : IJob
     {
         [ReadOnly] public NativeArray<float> A;
@@ -102,7 +104,8 @@ namespace ChaosRL
     /// C(MxN) = A(MxK) @ B(KxN), where BT is B transposed into (N x K).
     /// Parallelized over output elements (one job index computes one C[i,j]).
     /// </summary>
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard )]
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct MatMulNaiveParallelJob : IJobParallelFor
     {
         [ReadOnly, NativeDisableParallelForRestriction]
@@ -143,7 +146,7 @@ namespace ChaosRL
     /// each parallel index computes one output row in C.
     /// Better scheduling overhead than element-parallel for small matrices.
     /// </summary>
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard,
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
                    DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct MatMulRowParallelJob : IJobParallelFor
     {
@@ -188,7 +191,7 @@ namespace ChaosRL
     /// C(MxN) = A(MxK) @ B(KxN), with BT = transpose(B) shaped (N x K).
     /// One parallel index computes one output tile.
     /// </summary>
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard,
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
                    DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct MatMulBlockedParallelJob : IJobParallelFor
     {
@@ -273,7 +276,7 @@ namespace ChaosRL
     /// Last panel is zero-padded if N is not divisible by NR.
     /// Parallelized over column panels.
     /// </summary>
-    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Standard,
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
                    DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct PackBPanelParallelJob : IJobParallelFor
     {
@@ -331,6 +334,103 @@ namespace ChaosRL
                         d[ jr ] = src[ jr ];
                     for (; jr < NR; jr++)
                         d[ jr ] = 0f;
+                }
+            }
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>
+    /// Scalar-only GEBP MatMul — same algorithm as MatMulGebpParallelJob
+    /// (packed B panels, MR×NR micro-kernel) but with NO manual SIMD intrinsics.
+    /// Lets Burst's auto-vectorizer do all the work.
+    /// Used for benchmarking manual vs auto-vectorized performance.
+    ///
+    /// Burst auto-vectorization hints applied:
+    ///  - [NoAlias] on all NativeArray fields (removes aliasing barriers)
+    ///  - Constant NR trip count on innermost jr loop (packed B is zero-padded)
+    ///  - Loop.ExpectVectorized() on the hot jr loop
+    ///  - Accumulate branch hoisted out of jr loop
+    ///  - UnsafeUtility.MemClear for accumulator zeroing
+    ///  - stackalloc hoisted outside panel loop
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct MatMulGebpScalarParallelJob : IJobParallelFor
+    {
+        public const int MR = 6;
+        public const int NR = 16;
+
+        [NoAlias, ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> A;       // M × K  row-major
+
+        [NoAlias, ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> PackedB; // numPanels × K × NR, panel-packed
+
+        [NoAlias, NativeDisableParallelForRestriction]
+        public NativeArray<float> C;       // M × N  row-major
+
+        public int M, K, N;
+        public bool Accumulate;
+
+        [SkipLocalsInit]
+        public unsafe void Execute( int rowGroup )
+        {
+            int rowStart = rowGroup * MR;
+            if (rowStart >= M)
+                return;
+            int rowCount = math.min( MR, M - rowStart );
+
+            float* pA = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( A );
+            float* pPB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( PackedB );
+            float* pC = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( C );
+
+            int numPanels = (N + NR - 1) / NR;
+
+            // Hoist stackalloc outside the panel loop — one allocation, reused.
+            float* accum = stackalloc float[ MR * NR ];
+
+            for (int jp = 0; jp < numPanels; jp++)
+            {
+                float* panel = pPB + jp * K * NR;
+                int colStart = jp * NR;
+                int colCount = math.min( NR, N - colStart );
+
+                // Fast zero via memset instead of scalar loop
+                UnsafeUtility.MemClear( accum, MR * NR * sizeof( float ) );
+
+                // Main K-loop.
+                // Inner jr loop always iterates the full NR (constant trip count)
+                // because packed B is zero-padded — extra columns multiply zero,
+                // contributing nothing but enabling Burst to emit fixed-width SIMD.
+                for (int k = 0; k < K; k++)
+                {
+                    float* bk = panel + k * NR;
+                    for (int ii = 0; ii < rowCount; ii++)
+                    {
+                        float aVal = pA[ (rowStart + ii) * K + k ];
+                        float* acc = accum + ii * NR;
+
+                        for (int jr = 0; jr < NR; jr++)       // constant bound = 16
+                            acc[ jr ] += aVal * bk[ jr ];
+                    }
+                }
+
+                // Write back to C — only valid columns, Accumulate branch hoisted.
+                for (int ii = 0; ii < rowCount; ii++)
+                {
+                    int cBase = (rowStart + ii) * N + colStart;
+                    float* acc = accum + ii * NR;
+
+                    if (Accumulate)
+                    {
+                        for (int jr = 0; jr < colCount; jr++)
+                            pC[ cBase + jr ] += acc[ jr ];
+                    }
+                    else
+                    {
+                        for (int jr = 0; jr < colCount; jr++)
+                            pC[ cBase + jr ] = acc[ jr ];
+                    }
                 }
             }
         }
