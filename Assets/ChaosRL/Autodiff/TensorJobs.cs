@@ -347,8 +347,12 @@ namespace ChaosRL
     ///
     /// Burst auto-vectorization hints applied:
     ///  - [NoAlias] on all NativeArray fields (removes aliasing barriers)
+    ///  - Aliasing.ExpectNotAliased on raw pointers (belt-and-suspenders)
+    ///  - Hint.Likely fast path for full MR=6 row groups (common case)
+    ///  - Hint.Assume(K > 0) to eliminate empty-loop guards
+    ///  - Fully unrolled ii dimension with 6 fixed accumulator pointers (helps SROA)
+    ///  - Pre-loaded A values and single B load per jr element
     ///  - Constant NR trip count on innermost jr loop (packed B is zero-padded)
-    ///  - Loop.ExpectVectorized() on the hot jr loop
     ///  - Accumulate branch hoisted out of jr loop
     ///  - UnsafeUtility.MemClear for accumulator zeroing
     ///  - stackalloc hoisted outside panel loop
@@ -380,46 +384,102 @@ namespace ChaosRL
                 return;
             int rowCount = math.min( MR, M - rowStart );
 
-            float* pA = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( A );
+            float* pA  = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( A );
             float* pPB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( PackedB );
-            float* pC = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( C );
+            float* pC  = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( C );
+
+            // Tell Burst the raw pointers don't alias each other.
+            Aliasing.ExpectNotAliased( pA, pPB );
+            Aliasing.ExpectNotAliased( pA, pC );
+            Aliasing.ExpectNotAliased( pPB, pC );
+
+            // Help the compiler elide empty-loop guards.
+            Hint.Assume( K > 0 );
 
             int numPanels = (N + NR - 1) / NR;
 
             // Hoist stackalloc outside the panel loop — one allocation, reused.
             float* accum = stackalloc float[ MR * NR ];
 
+            // Tell Burst accum doesn't alias input/output buffers.
+            Aliasing.ExpectNotAliased( accum, pA );
+            Aliasing.ExpectNotAliased( accum, pPB );
+            Aliasing.ExpectNotAliased( accum, pC );
+
             for (int jp = 0; jp < numPanels; jp++)
             {
-                float* panel = pPB + jp * K * NR;
-                int colStart = jp * NR;
-                int colCount = math.min( NR, N - colStart );
+                float* panel    = pPB + jp * K * NR;
+                int    colStart = jp * NR;
+                int    colCount = math.min( NR, N - colStart );
 
-                // Fast zero via memset instead of scalar loop
+                // Fast zero via memset instead of scalar loop.
                 UnsafeUtility.MemClear( accum, MR * NR * sizeof( float ) );
 
-                // Main K-loop.
-                // Inner jr loop always iterates the full NR (constant trip count)
-                // because packed B is zero-padded — extra columns multiply zero,
-                // contributing nothing but enabling Burst to emit fixed-width SIMD.
-                for (int k = 0; k < K; k++)
+                // ---- Fast path: full MR=6 rows (the common case) ----
+                // Fully unrolls the row dimension so LLVM sees 6 independent
+                // accumulator streams with fixed pointer offsets, enabling
+                // SROA / register promotion of the accumulator tile.
+                if (Hint.Likely( rowCount == MR ))
                 {
-                    float* bk = panel + k * NR;
-                    for (int ii = 0; ii < rowCount; ii++)
-                    {
-                        float aVal = pA[ (rowStart + ii) * K + k ];
-                        float* acc = accum + ii * NR;
+                    // Pre-compute A row pointers (loop-invariant).
+                    float* a0 = pA + (rowStart + 0) * K;
+                    float* a1 = pA + (rowStart + 1) * K;
+                    float* a2 = pA + (rowStart + 2) * K;
+                    float* a3 = pA + (rowStart + 3) * K;
+                    float* a4 = pA + (rowStart + 4) * K;
+                    float* a5 = pA + (rowStart + 5) * K;
 
-                        for (int jr = 0; jr < NR; jr++)       // constant bound = 16
-                            acc[ jr ] += aVal * bk[ jr ];
+                    // Fixed accumulator row pointers — helps LLVM SROA.
+                    float* r0 = accum;
+                    float* r1 = accum + NR;
+                    float* r2 = accum + 2 * NR;
+                    float* r3 = accum + 3 * NR;
+                    float* r4 = accum + 4 * NR;
+                    float* r5 = accum + 5 * NR;
+
+                    for (int k = 0; k < K; k++)
+                    {
+                        float* bk = panel + k * NR;
+
+                        // Load all 6 A values once per k step.
+                        float av0 = a0[ k ], av1 = a1[ k ], av2 = a2[ k ];
+                        float av3 = a3[ k ], av4 = a4[ k ], av5 = a5[ k ];
+
+                        // Vectorizable inner loop: constant NR=16 trip count,
+                        // single B load reused across 6 independent FMA streams.
+                        for (int jr = 0; jr < NR; jr++)
+                        {
+                            float b = bk[ jr ];
+                            r0[ jr ] += av0 * b;
+                            r1[ jr ] += av1 * b;
+                            r2[ jr ] += av2 * b;
+                            r3[ jr ] += av3 * b;
+                            r4[ jr ] += av4 * b;
+                            r5[ jr ] += av5 * b;
+                        }
+                    }
+                }
+                // ---- Generic path for the last (partial) row group ----
+                else
+                {
+                    for (int k = 0; k < K; k++)
+                    {
+                        float* bk = panel + k * NR;
+                        for (int ii = 0; ii < rowCount; ii++)
+                        {
+                            float  aVal = pA[ (rowStart + ii) * K + k ];
+                            float* acc  = accum + ii * NR;
+                            for (int jr = 0; jr < NR; jr++)
+                                acc[ jr ] += aVal * bk[ jr ];
+                        }
                     }
                 }
 
                 // Write back to C — only valid columns, Accumulate branch hoisted.
                 for (int ii = 0; ii < rowCount; ii++)
                 {
-                    int cBase = (rowStart + ii) * N + colStart;
-                    float* acc = accum + ii * NR;
+                    int    cBase = (rowStart + ii) * N + colStart;
+                    float* acc   = accum + ii * NR;
 
                     if (Accumulate)
                     {
