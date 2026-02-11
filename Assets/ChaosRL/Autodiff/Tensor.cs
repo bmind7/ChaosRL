@@ -33,8 +33,6 @@ namespace ChaosRL
         private Action _backward;
         private bool _disposed;
 
-        private const int GebpMatMulThreshold = 16;
-
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
         {
@@ -475,130 +473,63 @@ namespace ChaosRL
         /// </summary>
         public Tensor MatMul( Tensor other )
         {
-            // Validate 2D tensors
             if (Shape.Length != 2 || other.Shape.Length != 2)
                 throw new ArgumentException( "MatMul requires 2D tensors" );
 
-            int M = Shape[ 0 ]; // rows of this
-            int K = Shape[ 1 ]; // cols of this / rows of other
-            int N = other.Shape[ 1 ]; // cols of other
+            int M = Shape[ 0 ];
+            int K = Shape[ 1 ];
+            int N = other.Shape[ 1 ];
 
             if (other.Shape[ 0 ] != K)
                 throw new ArgumentException( $"Inner dimensions must match: ({M}x{K}) @ ({other.Shape[ 0 ]}x{N})" );
 
             var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
 
-            // Forward pass:
-            // Use GEBP FMA kernel when matrix is large enough — reads B in original
-            // K×N layout, eliminating the separate transpose step entirely.
-            bool useGebp = M >= GebpMatMulThreshold &&
-                           K >= GebpMatMulThreshold &&
-                           N >= GebpMatMulThreshold;
-
-            if (useGebp)
-            {
-                TensorOps.ScheduleGebpMatMul(
-                    Data, other.Data, result.Data,
-                    M, K, N,
-                    accumulate: false ).Complete();
-            }
-            else
-            {
-                using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
-                {
-                    var th = TensorOps.ScheduleTranspose( other.Data, nativeBT, K, N );
-                    TensorOps.ScheduleNaiveMatMul(
-                        Data, nativeBT, result.Data,
-                        M, K, N,
-                        accumulate: false,
-                        dependsOn: th ).Complete();
-                }
-            }
+            // Forward: C = A @ B
+            TensorOps.ScheduleMatMul(
+                Data, other.Data, result.Data,
+                M, K, N, accumulate: false ).Complete();
 
             result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;
             if (result.RequiresGrad == false)
                 return result;
 
-            // Backward pass
+            // Backward: dA = dC @ B^T, dB = A^T @ dC
             result._backward = () =>
             {
-                if (useGebp)
+                JobHandle dAHandle = default, dBHandle = default;
+                NativeArray<float> tempBT = default, tempAT = default;
+                bool hasDa = false, hasDb = false;
+
+                if (this.RequiresGrad)
                 {
-                    JobHandle dAHandle = default, dBHandle = default;
-                    NativeArray<float> tempBT = default, tempAT = default;
-                    bool hasDa = false, hasDb = false;
-
-                    // dL/dA = dC(MxN) @ B^T(NxK) => (MxK)
-                    if (this.RequiresGrad)
-                    {
-                        tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
-                        var tBH = TensorOps.ScheduleTranspose( other.Data, tempBT, K, N );
-                        dAHandle = TensorOps.ScheduleGebpMatMul(
-                            result.Grad, tempBT, Grad,
-                            M, N, K, accumulate: true, dependsOn: tBH );
-                        hasDa = true;
-                    }
-
-                    // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
-                    if (other.RequiresGrad)
-                    {
-                        tempAT = new NativeArray<float>( Size, Allocator.TempJob );
-                        var tAH = TensorOps.ScheduleTranspose( Data, tempAT, M, K );
-                        dBHandle = TensorOps.ScheduleGebpMatMul(
-                            tempAT, result.Grad, other.Grad,
-                            K, M, N, accumulate: true, dependsOn: tAH );
-                        hasDb = true;
-                    }
-
-                    if (hasDa && hasDb)
-                        JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
-                    else if (hasDa)
-                        dAHandle.Complete();
-                    else if (hasDb)
-                        dBHandle.Complete();
-
-                    if (tempBT.IsCreated) tempBT.Dispose();
-                    if (tempAT.IsCreated) tempAT.Dispose();
+                    tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
+                    var tBH = TensorOps.ScheduleTranspose( other.Data, tempBT, K, N );
+                    dAHandle = TensorOps.ScheduleMatMul(
+                        result.Grad, tempBT, Grad,
+                        M, N, K, accumulate: true, dependsOn: tBH );
+                    hasDa = true;
                 }
-                else
+
+                if (other.RequiresGrad)
                 {
-                    JobHandle dAHandle = default;
-                    bool dAScheduled = false;
-
-                    // dL/dA = dC(MxN) @ B(KxN) — B already in NxK layout for naive
-                    if (this.RequiresGrad)
-                    {
-                        dAHandle = TensorOps.ScheduleNaiveMatMul(
-                            result.Grad, other.Data, Grad,
-                            M, N, K, accumulate: true );
-                        dAScheduled = true;
-                    }
-
-                    // dL/dB = A^T(KxM) @ dC^T(NxM) — both need transpose for naive
-                    if (other.RequiresGrad)
-                    {
-                        using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
-                        using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
-                        {
-                            var tAH = TensorOps.ScheduleTranspose( Data, nativeAT, M, K );
-                            var tDCH = TensorOps.ScheduleTranspose( result.Grad, nativeDCT, M, N );
-                            var deps = JobHandle.CombineDependencies( tAH, tDCH );
-
-                            var dBHandle = TensorOps.ScheduleNaiveMatMul(
-                                nativeAT, nativeDCT, other.Grad,
-                                K, M, N, accumulate: true, dependsOn: deps );
-
-                            if (dAScheduled)
-                                JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
-                            else
-                                dBHandle.Complete();
-                            return;
-                        }
-                    }
-
-                    if (dAScheduled)
-                        dAHandle.Complete();
+                    tempAT = new NativeArray<float>( Size, Allocator.TempJob );
+                    var tAH = TensorOps.ScheduleTranspose( Data, tempAT, M, K );
+                    dBHandle = TensorOps.ScheduleMatMul(
+                        tempAT, result.Grad, other.Grad,
+                        K, M, N, accumulate: true, dependsOn: tAH );
+                    hasDb = true;
                 }
+
+                if (hasDa && hasDb)
+                    JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
+                else if (hasDa)
+                    dAHandle.Complete();
+                else if (hasDb)
+                    dBHandle.Complete();
+
+                if (tempBT.IsCreated) tempBT.Dispose();
+                if (tempAT.IsCreated) tempAT.Dispose();
             };
 
             return result;

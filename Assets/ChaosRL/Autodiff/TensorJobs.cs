@@ -370,6 +370,12 @@ namespace ChaosRL
         /// </summary>
         public const int KC = 256;
 
+        /// <summary>
+        /// Minimum dimension size for using the GEBP kernel.
+        /// Below this threshold the naive transpose+dot path is used.
+        /// </summary>
+        public const int GebpThreshold = 16;
+
         //--------------------------------------------------------------
         public static int GetBatchSize( int totalWorkItems )
         {
@@ -404,10 +410,36 @@ namespace ChaosRL
         }
         //--------------------------------------------------------------
         /// <summary>
+        /// Schedules a MatMul: C(m×n) = A(m×k) @ B(k×n).
+        /// B is in original row-major layout.
+        /// Automatically picks GEBP (large) or Naive (small) kernel.
+        /// Any temporary buffers are auto-disposed when the returned handle completes.
+        /// </summary>
+        public static JobHandle ScheduleMatMul(
+            NativeArray<float> a,
+            NativeArray<float> b,
+            NativeArray<float> c,
+            int m,
+            int k,
+            int n,
+            bool accumulate,
+            JobHandle dependsOn = default )
+        {
+            if (m >= GebpThreshold && k >= GebpThreshold && n >= GebpThreshold)
+                return ScheduleGebpMatMul( a, b, c, m, k, n, accumulate, dependsOn );
+
+            // Small path: transpose B internally, run naive, auto-dispose temp.
+            var bt = new NativeArray<float>( k * n, Allocator.TempJob );
+            var th = ScheduleTranspose( b, bt, k, n, dependsOn );
+            var mmh = ScheduleNaiveMatMul( a, bt, c, m, k, n, accumulate, th );
+            return bt.Dispose( mmh );
+        }
+        //--------------------------------------------------------------
+        /// <summary>
         /// Schedules a naive MatMul using pre-transposed B:
         /// C(m×n) = A(m×k) @ BT^T, where BT is (n×k).
         /// </summary>
-        public static JobHandle ScheduleNaiveMatMul(
+        private static JobHandle ScheduleNaiveMatMul(
             NativeArray<float> a,
             NativeArray<float> bt,
             NativeArray<float> c,
@@ -438,7 +470,7 @@ namespace ChaosRL
         /// then runs GEBP micro-kernels per slice.
         /// The packed buffer is auto-disposed when the returned handle completes.
         /// </summary>
-        public static JobHandle ScheduleGebpMatMul(
+        private static JobHandle ScheduleGebpMatMul(
             NativeArray<float> a,
             NativeArray<float> b,
             NativeArray<float> c,
