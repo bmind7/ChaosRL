@@ -6,7 +6,6 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
-using Unity.Jobs.LowLevel.Unsafe;
 
 namespace ChaosRL
 {
@@ -35,7 +34,6 @@ namespace ChaosRL
         private bool _disposed;
 
         private const int GebpMatMulThreshold = 16;
-        private const int MinScheduleBatch = 1;
 
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
@@ -469,134 +467,7 @@ namespace ChaosRL
             };
             return result;
         }
-        //------------------------------------------------------------------
-        // Job scheduling helpers for MatMul and transpose kernels.
-        private static int GetBatchSize( int totalWorkItems )
-        {
-            int workerCount = Math.Max( 1, JobsUtility.JobWorkerCount + 1 );
-            int batch = totalWorkItems / (workerCount * 4);
-            return Math.Max( MinScheduleBatch, batch );
-        }
-        //------------------------------------------------------------------
-        private static JobHandle ScheduleTranspose(
-            NativeArray<float> input,
-            NativeArray<float> output,
-            int rows,
-            int cols,
-            JobHandle dependsOn = default )
-        {
-            int tileSize = TransposeTiledParallelJob.TILE;
-            int tileRows = (rows + tileSize - 1) / tileSize;
-            int tileCols = (cols + tileSize - 1) / tileSize;
-            int totalTiles = tileRows * tileCols;
 
-            var transposeJob = new TransposeTiledParallelJob
-            {
-                Input = input,
-                Output = output,
-                Rows = rows,
-                Cols = cols
-            };
-
-            int batch = GetBatchSize( totalTiles );
-            return transposeJob.Schedule( totalTiles, batch, dependsOn );
-        }
-        //------------------------------------------------------------------
-        private static JobHandle ScheduleMatMul(
-            NativeArray<float> a,
-            NativeArray<float> bt,
-            NativeArray<float> c,
-            int m,
-            int k,
-            int n,
-            bool accumulate,
-            JobHandle dependsOn = default )
-        {
-            int totalElements = m * n;
-            var naiveJob = new MatMulNaiveParallelJob
-            {
-                A = a,
-                BT = bt,
-                C = c,
-                M = m,
-                K = k,
-                N = n,
-                Accumulate = accumulate
-            };
-
-            int batch = GetBatchSize( totalElements );
-            return naiveJob.Schedule( totalElements, batch, dependsOn );
-        }
-        //------------------------------------------------------------------
-        /// <summary>
-        /// Schedules a GEBP MatMul: C(m×n) = A(m×k) @ B(k×n).
-        /// B must be in ORIGINAL row-major layout (NOT transposed).
-        /// Packs B into column-panel layout in Kc-thick slices for L1 residency,
-        /// then runs GEBP micro-kernels per slice.
-        /// The packed buffer is auto-disposed when the returned handle completes.
-        /// </summary>
-        private static JobHandle ScheduleGebpMatMul(
-            NativeArray<float> a,
-            NativeArray<float> b,
-            NativeArray<float> c,
-            int m,
-            int k,
-            int n,
-            bool accumulate,
-            JobHandle dependsOn = default )
-        {
-            // Kc chosen so one packed panel slice (Kc×NR×4 = 16 KB) + 6 A-rows
-            // (MR×Kc×4 = 6 KB) fit comfortably in L1 data cache (~32-48 KB).
-            const int KC = 256;
-            const int NR = PackBPanelScalarParallelJob.NR;
-            int numPanels = (n + NR - 1) / NR;
-
-            // Allocate packed buffer for the largest Kc slice (reused each block).
-            int maxKc = Math.Min( KC, k );
-            int packedSize = numPanels * maxKc * NR;
-            var packedB = new NativeArray<float>( packedSize, Allocator.TempJob );
-
-            int rowGroups = (m + MatMulGebpScalarParallelJob.MR - 1) / MatMulGebpScalarParallelJob.MR;
-            int packBatch = GetBatchSize( numPanels );
-            int gebpBatch = GetBatchSize( rowGroups );
-
-            JobHandle prevHandle = dependsOn;
-
-            for (int kb = 0; kb < k; kb += KC)
-            {
-                int thisKc = Math.Min( KC, k - kb );
-                bool isFirstBlock = (kb == 0);
-
-                // Phase 1: Pack Kc-thick slice of B (parallel over panels)
-                var packJob = new PackBPanelScalarParallelJob
-                {
-                    B = b,
-                    PackedB = packedB,
-                    N = n,
-                    KOffset = kb,
-                    Kc = thisKc
-                };
-                var packHandle = packJob.Schedule( numPanels, packBatch, prevHandle );
-
-                // Phase 2: GEBP micro-kernels (parallel over row-groups)
-                var gebpJob = new MatMulGebpScalarParallelJob
-                {
-                    A = a,
-                    PackedB = packedB,
-                    C = c,
-                    M = m,
-                    K = k,
-                    N = n,
-                    KOffset = kb,
-                    Kc = thisKc,
-                    Accumulate = isFirstBlock ? accumulate : true
-                };
-                prevHandle = gebpJob.Schedule( rowGroups, gebpBatch, packHandle );
-            }
-
-            // Auto-dispose packed buffer after all blocks complete
-            return packedB.Dispose( prevHandle );
-        }
         //------------------------------------------------------------------
         /// <summary>
         /// Matrix multiplication: (M×K) @ (K×N) -> (M×N)
@@ -626,35 +497,21 @@ namespace ChaosRL
 
             if (useGebp)
             {
-                var mmHandle = ScheduleGebpMatMul(
-                    Data,
-                    other.Data,
-                    result.Data,
-                    M,
-                    K,
-                    N,
-                    accumulate: false );
-
-                mmHandle.Complete();
+                TensorOps.ScheduleGebpMatMul(
+                    Data, other.Data, result.Data,
+                    M, K, N,
+                    accumulate: false ).Complete();
             }
             else
             {
-                // Small matrix path: transpose B then use row/blocked kernel
                 using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
                 {
-                    var transposeHandle = ScheduleTranspose( other.Data, nativeBT, K, N );
-
-                    var mmHandle = ScheduleMatMul(
-                        Data,
-                        nativeBT,
-                        result.Data,
-                        M,
-                        K,
-                        N,
+                    var th = TensorOps.ScheduleTranspose( other.Data, nativeBT, K, N );
+                    TensorOps.ScheduleNaiveMatMul(
+                        Data, nativeBT, result.Data,
+                        M, K, N,
                         accumulate: false,
-                        dependsOn: transposeHandle );
-
-                    mmHandle.Complete();
+                        dependsOn: th ).Complete();
                 }
             }
 
@@ -667,7 +524,6 @@ namespace ChaosRL
             {
                 if (useGebp)
                 {
-                    // GEBP backward: schedule dA and dB transposes + matmuls concurrently
                     JobHandle dAHandle = default, dBHandle = default;
                     NativeArray<float> tempBT = default, tempAT = default;
                     bool hasDa = false, hasDb = false;
@@ -676,30 +532,24 @@ namespace ChaosRL
                     if (this.RequiresGrad)
                     {
                         tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
-                        var tBH = ScheduleTranspose( other.Data, tempBT, K, N );
-                        dAHandle = ScheduleGebpMatMul(
+                        var tBH = TensorOps.ScheduleTranspose( other.Data, tempBT, K, N );
+                        dAHandle = TensorOps.ScheduleGebpMatMul(
                             result.Grad, tempBT, Grad,
-                            M, N, K,
-                            accumulate: true,
-                            dependsOn: tBH );
+                            M, N, K, accumulate: true, dependsOn: tBH );
                         hasDa = true;
                     }
 
                     // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
-                    // dC is already MxN row-major — no transpose needed!
                     if (other.RequiresGrad)
                     {
                         tempAT = new NativeArray<float>( Size, Allocator.TempJob );
-                        var tAH = ScheduleTranspose( Data, tempAT, M, K );
-                        dBHandle = ScheduleGebpMatMul(
+                        var tAH = TensorOps.ScheduleTranspose( Data, tempAT, M, K );
+                        dBHandle = TensorOps.ScheduleGebpMatMul(
                             tempAT, result.Grad, other.Grad,
-                            K, M, N,
-                            accumulate: true,
-                            dependsOn: tAH );
+                            K, M, N, accumulate: true, dependsOn: tAH );
                         hasDb = true;
                     }
 
-                    // Wait for both to complete concurrently
                     if (hasDa && hasDb)
                         JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
                     else if (hasDa)
@@ -707,41 +557,36 @@ namespace ChaosRL
                     else if (hasDb)
                         dBHandle.Complete();
 
-                    // Dispose temp buffers
                     if (tempBT.IsCreated) tempBT.Dispose();
                     if (tempAT.IsCreated) tempAT.Dispose();
                 }
                 else
                 {
-                    // Small matrix backward path (original BT-based approach)
                     JobHandle dAHandle = default;
                     bool dAScheduled = false;
 
+                    // dL/dA = dC(MxN) @ B(KxN) — B already in NxK layout for naive
                     if (this.RequiresGrad)
                     {
-                        dAHandle = ScheduleMatMul(
+                        dAHandle = TensorOps.ScheduleNaiveMatMul(
                             result.Grad, other.Data, Grad,
-                            M, N, K,
-                            accumulate: true );
+                            M, N, K, accumulate: true );
                         dAScheduled = true;
                     }
 
+                    // dL/dB = A^T(KxM) @ dC^T(NxM) — both need transpose for naive
                     if (other.RequiresGrad)
                     {
                         using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
                         using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
                         {
-                            JobHandle tAHandle, tDCHandle;
-                            tAHandle = ScheduleTranspose( Data, nativeAT, M, K );
-                            tDCHandle = ScheduleTranspose( result.Grad, nativeDCT, M, N );
+                            var tAH = TensorOps.ScheduleTranspose( Data, nativeAT, M, K );
+                            var tDCH = TensorOps.ScheduleTranspose( result.Grad, nativeDCT, M, N );
+                            var deps = JobHandle.CombineDependencies( tAH, tDCH );
 
-                            JobHandle dBHandle;
-                            var dBDeps = JobHandle.CombineDependencies( tAHandle, tDCHandle );
-                            dBHandle = ScheduleMatMul(
+                            var dBHandle = TensorOps.ScheduleNaiveMatMul(
                                 nativeAT, nativeDCT, other.Grad,
-                                K, M, N,
-                                accumulate: true,
-                                dependsOn: dBDeps );
+                                K, M, N, accumulate: true, dependsOn: deps );
 
                             if (dAScheduled)
                                 JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
@@ -781,7 +626,7 @@ namespace ChaosRL
                 {
                     Target = Grad,
                     Value = gradVal
-                }.Schedule( Size, GetBatchSize( Size ) ).Complete();
+                }.Schedule( Size, TensorOps.GetBatchSize( Size ) ).Complete();
             };
 
             return result;
