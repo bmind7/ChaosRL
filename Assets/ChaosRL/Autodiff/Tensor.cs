@@ -766,10 +766,8 @@ namespace ChaosRL
         {
             var result = new Tensor( new[] { 1 }, new[] { this }, "sum" );
 
-            float sum = 0f;
-            for (int i = 0; i < Size; i++)
-                sum += Data[ i ];
-            result.Data[ 0 ] = sum;
+            // Burst-compiled reduction — avoids per-element NativeArray safety checks in Editor.
+            new SumReductionJob { Input = Data, Output = result.Data }.Run();
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -777,9 +775,13 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                // Gradient broadcasts to all input elements
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += result.Grad[ 0 ];
+                // Burst-compiled scalar broadcast — avoids 2N managed array accesses.
+                float gradVal = result.Grad[ 0 ];
+                new AddScalarParallelJob
+                {
+                    Target = Grad,
+                    Value = gradVal
+                }.Schedule( Size, GetBatchSize( Size ) ).Complete();
             };
 
             return result;
@@ -1377,18 +1379,25 @@ namespace ChaosRL
 
             BuildTopo( this );
 
-            for (int i = 0; i < Grad.Length; i++)
-                Grad[ i ] = 1f;
+            // Burst-safe fill: write 1.0f to all grad elements without managed indexing.
+            unsafe
+            {
+                float one = 1f;
+                UnsafeUtility.MemCpyReplicate(
+                    NativeArrayUnsafeUtility.GetUnsafePtr( Grad ),
+                    &one, sizeof( float ), Grad.Length );
+            }
 
             topo.Reverse();
             foreach (var t in topo)
                 t._backward?.Invoke();
         }
         //------------------------------------------------------------------
-        public void ZeroGrad()
+        public unsafe void ZeroGrad()
         {
-            for (int i = 0; i < Grad.Length; i++)
-                Grad[ i ] = 0f;
+            UnsafeUtility.MemClear(
+                NativeArrayUnsafeUtility.GetUnsafePtr( Grad ),
+                Grad.Length * sizeof( float ) );
         }
         //------------------------------------------------------------------
         public override string ToString()

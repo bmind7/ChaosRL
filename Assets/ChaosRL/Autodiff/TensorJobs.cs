@@ -315,4 +315,42 @@ namespace ChaosRL
         }
     }
     //------------------------------------------------------------------
+    /// <summary>
+    /// Burst-compiled sum reduction: Output[0] = sum of all Input elements.
+    /// Single-threaded IJob — Burst auto-vectorizes the accumulation with SIMD.
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct SumReductionJob : IJob
+    {
+        [ReadOnly] public NativeArray<float> Input;
+        [WriteOnly] public NativeArray<float> Output; // length 1
+
+        public void Execute()
+        {
+            float sum = 0f;
+            for (int i = 0; i < Input.Length; i++)
+                sum += Input[ i ];
+            Output[ 0 ] = sum;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>
+    /// Burst-compiled scalar broadcast: Target[index] += Value.
+    /// Used by Sum backward to broadcast the gradient to all input elements.
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct AddScalarParallelJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction]
+        public NativeArray<float> Target;
+        public float Value;
+
+        public void Execute( int index )
+        {
+            Target[ index ] += Value;
+        }
+    }
+    //------------------------------------------------------------------
 }
