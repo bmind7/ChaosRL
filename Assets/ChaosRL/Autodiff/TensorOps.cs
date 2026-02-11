@@ -13,6 +13,17 @@ namespace ChaosRL
     /// </summary>
     public static class TensorOps
     {
+        static TensorOps()
+        {
+            if (PackBPanelScalarParallelJob.NR != MatMulGebpScalarParallelJob.NR)
+                throw new InvalidOperationException(
+                    $"NR mismatch: PackBPanel.NR={PackBPanelScalarParallelJob.NR} vs GebpKernel.NR={MatMulGebpScalarParallelJob.NR}" );
+
+            if (MatMulGebpScalarParallelJob.MR < 1)
+                throw new InvalidOperationException(
+                    $"MR must be >= 1, got {MatMulGebpScalarParallelJob.MR}" );
+        }
+
         /// <summary>
         /// K-dimension block size for GEBP L1 residency.
         /// Chosen so one panel slice (KC×NR×4 = 16 KB) + 6 A-rows (MR×KC×4 = 6 KB)
