@@ -69,9 +69,9 @@ namespace ChaosRL
                 (768, 768, 768),
                 (1024, 1024, 1024),
                 (1536, 1536, 1536),
-                (2048, 2048, 2048),
                 (1024, 2048, 1024),
                 (2048, 1024, 2048),
+                (2048, 2048, 2048),
             };
 
             sb.AppendLine( "CPU Results (MatMul Only):" );
@@ -363,23 +363,23 @@ namespace ChaosRL
                                 int thisKc = Math.Min( KC, K - kb );
                                 new PackBPanelScalarParallelJob
                                 {
-                                    B       = bData,
+                                    B = bData,
                                     PackedB = packedB,
-                                    N       = N,
+                                    N = N,
                                     KOffset = kb,
-                                    Kc      = thisKc
+                                    Kc = thisKc
                                 }.Schedule( numPanels, packBatch ).Complete();
 
                                 new MatMulGebpScalarParallelJob
                                 {
-                                    A          = aData,
-                                    PackedB    = packedB,
-                                    C          = cData,
-                                    M          = M,
-                                    K          = K,
-                                    N          = N,
-                                    KOffset    = kb,
-                                    Kc         = thisKc,
+                                    A = aData,
+                                    PackedB = packedB,
+                                    C = cData,
+                                    M = M,
+                                    K = K,
+                                    N = N,
+                                    KOffset = kb,
+                                    Kc = thisKc,
                                     Accumulate = (kb > 0)
                                 }.Schedule( rowGroups, gebpBatch ).Complete();
                             }
