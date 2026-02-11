@@ -430,8 +430,22 @@ namespace ChaosRL
                     }
                     _benchmarkResults = sb.ToString();
 
-                    // 5. GEBP Scalar (Burst auto-vectorized, same algorithm, no manual SIMD)
+                    // 5. GEBP Scalar (Burst auto-vectorized pack + matmul, no manual SIMD)
                     {
+                        // Pack B using the scalar packer (no intrinsics).
+                        const int NR_S = PackBPanelScalarParallelJob.NR;
+                        int numPanelsS = (N + NR_S - 1) / NR_S;
+                        int packedSizeS = numPanelsS * K * NR_S;
+                        var packedBScalar = new NativeArray<float>( packedSizeS, Allocator.TempJob,
+                            NativeArrayOptions.ClearMemory );
+                        new PackBPanelScalarParallelJob
+                        {
+                            B = bData,
+                            PackedB = packedBScalar,
+                            K = K,
+                            N = N
+                        }.Schedule( numPanelsS, Math.Max( 1, numPanelsS / 8 ) ).Complete();
+
                         int rowGroups = (M + MatMulGebpScalarParallelJob.MR - 1) / MatMulGebpScalarParallelJob.MR;
                         int batch = ComputeBatchSize( rowGroups );
                         double ms = BenchmarkAction( warmup, iterations, () =>
@@ -439,7 +453,7 @@ namespace ChaosRL
                             new MatMulGebpScalarParallelJob
                             {
                                 A = aData,
-                                PackedB = packedB,
+                                PackedB = packedBScalar,
                                 C = cData,
                                 M = M,
                                 K = K,
@@ -450,6 +464,7 @@ namespace ChaosRL
                         double gf = (flops / (ms / 1000.0)) / 1e9;
                         var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );
                         sb.AppendLine( $"  {"GEBP (Burst Auto)",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
+                        packedBScalar.Dispose();
                     }
                     _benchmarkResults = sb.ToString();
 

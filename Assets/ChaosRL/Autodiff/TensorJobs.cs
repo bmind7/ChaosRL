@@ -340,6 +340,68 @@ namespace ChaosRL
     }
     //------------------------------------------------------------------
     /// <summary>
+    /// Scalar-only panel packer — same layout as PackBPanelParallelJob but with
+    /// NO manual SIMD intrinsics. Burst auto-vectorizes the copy loop.
+    /// Paired with MatMulGebpScalarParallelJob for a fully portable GEBP pipeline.
+    ///
+    /// Full panels (colCount == NR): single copy loop with constant NR trip count.
+    /// Partial panels: copy valid columns, zero-pad rest.
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct PackBPanelScalarParallelJob : IJobParallelFor
+    {
+        public const int NR = 16;
+
+        [NoAlias, ReadOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> B;  // K × N row-major
+
+        [NoAlias, WriteOnly, NativeDisableParallelForRestriction]
+        public NativeArray<float> PackedB;  // numPanels × K × NR
+
+        public int K, N;
+
+        [SkipLocalsInit]
+        public unsafe void Execute( int panelIndex )
+        {
+            int colStart = panelIndex * NR;
+            int colCount = math.min( NR, N - colStart );
+
+            float* pB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( B );
+            float* dst = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( PackedB )
+                         + panelIndex * K * NR;
+
+            Hint.Assume( K > 0 );
+
+            if (Hint.Likely( colCount == NR ))
+            {
+                // Full panel: constant NR=16 trip count → Burst emits SIMD copy.
+                for (int k = 0; k < K; k++)
+                {
+                    float* src = pB + k * N + colStart;
+                    float* d = dst + k * NR;
+                    for (int jr = 0; jr < NR; jr++)
+                        d[ jr ] = src[ jr ];
+                }
+            }
+            else
+            {
+                // Partial panel: copy valid columns, zero-pad rest.
+                for (int k = 0; k < K; k++)
+                {
+                    float* src = pB + k * N + colStart;
+                    float* d = dst + k * NR;
+                    int jr = 0;
+                    for (; jr < colCount; jr++)
+                        d[ jr ] = src[ jr ];
+                    for (; jr < NR; jr++)
+                        d[ jr ] = 0f;
+                }
+            }
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>
     /// Scalar-only GEBP MatMul — same algorithm as MatMulGebpParallelJob
     /// (packed B panels, MR×NR micro-kernel) but with NO manual SIMD intrinsics.
     /// Lets Burst's auto-vectorizer do all the work.
