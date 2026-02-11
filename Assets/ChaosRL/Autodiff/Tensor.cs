@@ -531,8 +531,8 @@ namespace ChaosRL
         /// <summary>
         /// Schedules a GEBP MatMul: C(m×n) = A(m×k) @ B(k×n).
         /// B must be in ORIGINAL row-major layout (NOT transposed).
-        /// Packs B into column-panel layout once, then runs GEBP micro-kernels
-        /// that read the packed buffer sequentially for full L1 throughput.
+        /// Packs B into column-panel layout in Kc-thick slices for L1 residency,
+        /// then runs GEBP micro-kernels per slice.
         /// The packed buffer is auto-disposed when the returned handle completes.
         /// </summary>
         private static JobHandle ScheduleGebpMatMul(
@@ -545,40 +545,57 @@ namespace ChaosRL
             bool accumulate,
             JobHandle dependsOn = default )
         {
+            // Kc chosen so one packed panel slice (Kc×NR×4 = 16 KB) + 6 A-rows
+            // (MR×Kc×4 = 6 KB) fit comfortably in L1 data cache (~32-48 KB).
+            const int KC = 256;
             const int NR = PackBPanelScalarParallelJob.NR;
             int numPanels = (n + NR - 1) / NR;
-            int packedSize = numPanels * k * NR;
 
+            // Allocate packed buffer for the largest Kc slice (reused each block).
+            int maxKc = Math.Min( KC, k );
+            int packedSize = numPanels * maxKc * NR;
             var packedB = new NativeArray<float>( packedSize, Allocator.TempJob );
 
-            // Phase 1: Pack B into column-panel layout (parallel over panels)
-            var packJob = new PackBPanelScalarParallelJob
-            {
-                B = b,
-                PackedB = packedB,
-                K = k,
-                N = n
-            };
-            int packBatch = GetBatchSize( numPanels );
-            var packHandle = packJob.Schedule( numPanels, packBatch, dependsOn );
-
-            // Phase 2: GEBP micro-kernels read from packed B (parallel over row-groups)
             int rowGroups = (m + MatMulGebpScalarParallelJob.MR - 1) / MatMulGebpScalarParallelJob.MR;
-            var gebpJob = new MatMulGebpScalarParallelJob
-            {
-                A = a,
-                PackedB = packedB,
-                C = c,
-                M = m,
-                K = k,
-                N = n,
-                Accumulate = accumulate
-            };
-            int batch = GetBatchSize( rowGroups );
-            var gebpHandle = gebpJob.Schedule( rowGroups, batch, packHandle );
+            int packBatch = GetBatchSize( numPanels );
+            int gebpBatch = GetBatchSize( rowGroups );
 
-            // Auto-dispose packed buffer after GEBP completes
-            return packedB.Dispose( gebpHandle );
+            JobHandle prevHandle = dependsOn;
+
+            for (int kb = 0; kb < k; kb += KC)
+            {
+                int thisKc = Math.Min( KC, k - kb );
+                bool isFirstBlock = (kb == 0);
+
+                // Phase 1: Pack Kc-thick slice of B (parallel over panels)
+                var packJob = new PackBPanelScalarParallelJob
+                {
+                    B = b,
+                    PackedB = packedB,
+                    N = n,
+                    KOffset = kb,
+                    Kc = thisKc
+                };
+                var packHandle = packJob.Schedule( numPanels, packBatch, prevHandle );
+
+                // Phase 2: GEBP micro-kernels (parallel over row-groups)
+                var gebpJob = new MatMulGebpScalarParallelJob
+                {
+                    A = a,
+                    PackedB = packedB,
+                    C = c,
+                    M = m,
+                    K = k,
+                    N = n,
+                    KOffset = kb,
+                    Kc = thisKc,
+                    Accumulate = isFirstBlock ? accumulate : true
+                };
+                prevHandle = gebpJob.Schedule( rowGroups, gebpBatch, packHandle );
+            }
+
+            // Auto-dispose packed buffer after all blocks complete
+            return packedB.Dispose( prevHandle );
         }
         //------------------------------------------------------------------
         /// <summary>

@@ -342,35 +342,47 @@ namespace ChaosRL
                     }
                     _benchmarkResults = sb.ToString();
 
-                    // 2. GEBP (Burst auto-vectorized pack + matmul)
+                    // 2. GEBP (Burst auto-vectorized, Kc-blocked pack + matmul)
                     {
                         const int NR = PackBPanelScalarParallelJob.NR;
+                        const int KC = 256;
                         int numPanels = (N + NR - 1) / NR;
-                        int packedSize = numPanels * K * NR;
+                        int maxKc = Math.Min( KC, K );
+                        int packedSize = numPanels * maxKc * NR;
                         var packedB = new NativeArray<float>( packedSize, Allocator.TempJob,
                             NativeArrayOptions.ClearMemory );
-                        new PackBPanelScalarParallelJob
-                        {
-                            B = bData,
-                            PackedB = packedB,
-                            K = K,
-                            N = N
-                        }.Schedule( numPanels, Math.Max( 1, numPanels / 8 ) ).Complete();
 
                         int rowGroups = (M + MatMulGebpScalarParallelJob.MR - 1) / MatMulGebpScalarParallelJob.MR;
-                        int batch = ComputeBatchSize( rowGroups );
+                        int gebpBatch = ComputeBatchSize( rowGroups );
+                        int packBatch = Math.Max( 1, numPanels / 8 );
+
                         double ms = BenchmarkAction( warmup, iterations, () =>
                         {
-                            new MatMulGebpScalarParallelJob
+                            for (int kb = 0; kb < K; kb += KC)
                             {
-                                A = aData,
-                                PackedB = packedB,
-                                C = cData,
-                                M = M,
-                                K = K,
-                                N = N,
-                                Accumulate = false
-                            }.Schedule( rowGroups, batch ).Complete();
+                                int thisKc = Math.Min( KC, K - kb );
+                                new PackBPanelScalarParallelJob
+                                {
+                                    B       = bData,
+                                    PackedB = packedB,
+                                    N       = N,
+                                    KOffset = kb,
+                                    Kc      = thisKc
+                                }.Schedule( numPanels, packBatch ).Complete();
+
+                                new MatMulGebpScalarParallelJob
+                                {
+                                    A          = aData,
+                                    PackedB    = packedB,
+                                    C          = cData,
+                                    M          = M,
+                                    K          = K,
+                                    N          = N,
+                                    KOffset    = kb,
+                                    Kc         = thisKc,
+                                    Accumulate = (kb > 0)
+                                }.Schedule( rowGroups, gebpBatch ).Complete();
+                            }
                         } );
                         double gf = (flops / (ms / 1000.0)) / 1e9;
                         var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );

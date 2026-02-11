@@ -94,9 +94,9 @@ namespace ChaosRL
 
     //------------------------------------------------------------------
     /// <summary>
-    /// Packs B(K×N) into column-panel layout for GEBP micro-kernel access.
-    /// Packed layout: panel[jp] contains K rows of NR consecutive columns.
-    /// Storage: PackedB[jp * K * NR + k * NR + jr] = B[k, jp*NR + jr].
+    /// Packs a Kc-thick slice of B(K×N) into column-panel layout for GEBP.
+    /// Packed layout: panel[jp] contains Kc rows of NR consecutive columns.
+    /// Storage: PackedB[jp * Kc * NR + k * NR + jr] = B[(KOffset+k), jp*NR + jr].
     /// Last panel is zero-padded if N is not divisible by NR.
     /// Burst auto-vectorizes the copy loop (no manual SIMD intrinsics).
     /// </summary>
@@ -110,9 +110,11 @@ namespace ChaosRL
         public NativeArray<float> B;  // K × N row-major
 
         [NoAlias, WriteOnly, NativeDisableParallelForRestriction]
-        public NativeArray<float> PackedB;  // numPanels × K × NR
+        public NativeArray<float> PackedB;  // numPanels × Kc × NR
 
-        public int K, N;
+        public int N;       // B column count (row stride)
+        public int KOffset; // first K-row to pack
+        public int Kc;      // number of K-rows to pack in this block
 
         [SkipLocalsInit]
         public unsafe void Execute( int panelIndex )
@@ -122,16 +124,16 @@ namespace ChaosRL
 
             float* pB = (float*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr( B );
             float* dst = (float*)NativeArrayUnsafeUtility.GetUnsafePtr( PackedB )
-                         + panelIndex * K * NR;
+                         + panelIndex * Kc * NR;
 
-            Hint.Assume( K > 0 );
+            Hint.Assume( Kc > 0 );
 
             if (Hint.Likely( colCount == NR ))
             {
                 // Full panel: constant NR=16 trip count → Burst emits SIMD copy.
-                for (int k = 0; k < K; k++)
+                for (int k = 0; k < Kc; k++)
                 {
-                    float* src = pB + k * N + colStart;
+                    float* src = pB + (KOffset + k) * N + colStart;
                     float* d = dst + k * NR;
                     for (int jr = 0; jr < NR; jr++)
                         d[ jr ] = src[ jr ];
@@ -140,9 +142,9 @@ namespace ChaosRL
             else
             {
                 // Partial panel: copy valid columns, zero-pad rest.
-                for (int k = 0; k < K; k++)
+                for (int k = 0; k < Kc; k++)
                 {
-                    float* src = pB + k * N + colStart;
+                    float* src = pB + (KOffset + k) * N + colStart;
                     float* d = dst + k * NR;
                     int jr = 0;
                     for (; jr < colCount; jr++)
@@ -155,7 +157,8 @@ namespace ChaosRL
     }
     //------------------------------------------------------------------
     /// <summary>
-    /// GEBP MatMul: C(M×N) = A(M×K) @ B(K×N) with B pre-packed into column-panel layout.
+    /// GEBP MatMul: C(M×N) += A(M×K) @ PackedB for a Kc-thick slice of K.
+    /// Reads columns KOffset..KOffset+Kc-1 from A, and a Kc-deep packed B panel.
     /// Uses a 6×16 micro-kernel with NO manual SIMD intrinsics — Burst auto-vectorizes.
     /// Parallelized over row-groups of MR=6 rows each.
     ///
@@ -163,7 +166,7 @@ namespace ChaosRL
     ///  - [NoAlias] on all NativeArray fields (removes aliasing barriers)
     ///  - Aliasing.ExpectNotAliased on raw pointers
     ///  - Hint.Likely fast path for full MR=6 row groups (common case)
-    ///  - Hint.Assume(K > 0) to eliminate empty-loop guards
+    ///  - Hint.Assume(Kc > 0) to eliminate empty-loop guards
     ///  - Fully unrolled ii dimension with 6 fixed accumulator pointers (helps SROA)
     ///  - Pre-loaded A values and single B load per jr element
     ///  - Constant NR trip count on innermost jr loop (packed B is zero-padded)
@@ -182,12 +185,14 @@ namespace ChaosRL
         public NativeArray<float> A;       // M × K  row-major
 
         [NoAlias, ReadOnly, NativeDisableParallelForRestriction]
-        public NativeArray<float> PackedB; // numPanels × K × NR, panel-packed
+        public NativeArray<float> PackedB; // numPanels × Kc × NR, panel-packed
 
         [NoAlias, NativeDisableParallelForRestriction]
         public NativeArray<float> C;       // M × N  row-major
 
         public int M, K, N;
+        public int KOffset; // first K-column for this Kc block
+        public int Kc;      // number of K-columns in this block
         public bool Accumulate;
 
         [SkipLocalsInit]
@@ -208,7 +213,7 @@ namespace ChaosRL
             Aliasing.ExpectNotAliased( pPB, pC );
 
             // Help the compiler elide empty-loop guards.
-            Hint.Assume( K > 0 );
+            Hint.Assume( Kc > 0 );
 
             int numPanels = (N + NR - 1) / NR;
 
@@ -222,7 +227,7 @@ namespace ChaosRL
 
             for (int jp = 0; jp < numPanels; jp++)
             {
-                float* panel = pPB + jp * K * NR;
+                float* panel = pPB + jp * Kc * NR;
                 int colStart = jp * NR;
                 int colCount = math.min( NR, N - colStart );
 
@@ -236,12 +241,12 @@ namespace ChaosRL
                 if (Hint.Likely( rowCount == MR ))
                 {
                     // Pre-compute A row pointers (loop-invariant).
-                    float* a0 = pA + (rowStart + 0) * K;
-                    float* a1 = pA + (rowStart + 1) * K;
-                    float* a2 = pA + (rowStart + 2) * K;
-                    float* a3 = pA + (rowStart + 3) * K;
-                    float* a4 = pA + (rowStart + 4) * K;
-                    float* a5 = pA + (rowStart + 5) * K;
+                    float* a0 = pA + (rowStart + 0) * K + KOffset;
+                    float* a1 = pA + (rowStart + 1) * K + KOffset;
+                    float* a2 = pA + (rowStart + 2) * K + KOffset;
+                    float* a3 = pA + (rowStart + 3) * K + KOffset;
+                    float* a4 = pA + (rowStart + 4) * K + KOffset;
+                    float* a5 = pA + (rowStart + 5) * K + KOffset;
 
                     // Fixed accumulator row pointers — helps LLVM SROA.
                     float* r0 = accum;
@@ -251,7 +256,7 @@ namespace ChaosRL
                     float* r4 = accum + 4 * NR;
                     float* r5 = accum + 5 * NR;
 
-                    for (int k = 0; k < K; k++)
+                    for (int k = 0; k < Kc; k++)
                     {
                         float* bk = panel + k * NR;
 
@@ -276,12 +281,12 @@ namespace ChaosRL
                 // ---- Generic path for the last (partial) row group ----
                 else
                 {
-                    for (int k = 0; k < K; k++)
+                    for (int k = 0; k < Kc; k++)
                     {
                         float* bk = panel + k * NR;
                         for (int ii = 0; ii < rowCount; ii++)
                         {
-                            float aVal = pA[ (rowStart + ii) * K + k ];
+                            float aVal = pA[ (rowStart + ii) * K + KOffset + k ];
                             float* acc = accum + ii * NR;
                             for (int jr = 0; jr < NR; jr++)
                                 acc[ jr ] += aVal * bk[ jr ];
