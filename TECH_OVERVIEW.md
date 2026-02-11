@@ -20,50 +20,10 @@ The scope is intentionally code-centric. It prioritizes architecture and APIs in
   - PPO training loop for continuous control
   - Runtime agent/environment integration
 
-## Architecture At A Glance
-```text
-                    +------------------------------+
-                    |   Unity Physics Environment  |
-                    |  (ball-platform simulation)  |
-                    +---------------+--------------+
-                                    ^
-                                    | apply actions / receive state
-                                    |
-+-------------------+     calls     |      +-------------------------------+
-| ChaosAgent        +---------------------> | Academy (PPO orchestrator)   |
-| (Assembly-CSharp) | <---------------------+ policy actions               |
-+---------+---------+                       +---------------+---------------+
-          |                                                 |
-          |                                                 | owns/trains
-          |                                                 v
-          |                              +------------------+------------------+
-          |                              | NN stack (MLP, Layer, Adam, L2)   |
-          |                              +------------------+------------------+
-          |                                                 |
-          |                                                 | tensor ops + grad
-          |                                                 v
-          |                              +------------------+------------------+
-          |                              | Tensor autodiff core               |
-          |                              | (Tensor, TensorJobs, Value legacy)|
-          |                              +------------------+------------------+
-          |                                                 |
-          |                                +----------------+----------------+
-          |                                | Dist / RandomHub / Utils       |
-          |                                +---------------------------------+
-          |
-          +-----------------------------+
-                                        |
-                             +----------v-----------+
-                             | Tests & Benchmarks   |
-                             | (Editor test suite + |
-                             | benchmark UI scene)  |
-                             +----------------------+
-```
-
 ## Core Subsystems
 | Subsystem | Primary Responsibility | Main Types |
 |---|---|---|
-| Autodiff Core | Tensor storage, shape ops, operator overloading, dynamic graph backprop | `Tensor`, `TensorJobs`, `Value`, `ValueExtensions` |
+| Autodiff Core | Tensor storage, shape ops, operator overloading, dynamic graph backprop | `Tensor`, `TensorOps`, `TensorJobs`, `Value`, `ValueExtensions` |
 | NN Stack | Feed-forward layers, model composition, optimization, L2 penalty | `Layer`, `MLP`, `AdamOptimizer`, `L2Regularizer` |
 | RL Training Loop | PPO rollout buffering, GAE computation, minibatch optimization | `Academy` |
 | Probability + Utility | Gaussian policy math, RNG, minibatch extraction | `Dist`, `RandomHub`, `Utils` |
@@ -90,21 +50,43 @@ Each class entry follows the same mini-spec format:
   - `MatMul` currently requires 2D tensors with matching inner dimension.
   - Broadcasting is constrained by internal `CanBroadcastModulo(...)` rules.
   - View-like ops (`Reshape`, `Squeeze`, `Unsqueeze`) share underlying storage.
+  - `ZeroGrad` uses `UnsafeUtility.MemClear`; `Backward` grad seed uses `UnsafeUtility.MemCpyReplicate`.
+  - `Sum` forward/backward uses Burst jobs (`SumReductionJob`, `AddScalarParallelJob`).
 - Main collaborators:
   - `Layer`, `MLP`, `Academy`, `Dist`, tests, and benchmark harnesses.
-  - Uses `TensorJobs` for matrix multiplication kernels.
+  - Uses `TensorOps` for MatMul and transpose scheduling, which delegates to `TensorJobs` Burst kernels.
 
 ### `TensorJobs` (`Assets/ChaosRL/Autodiff/TensorJobs.cs`)
-- Responsibility: Burst-compatible job kernels used by tensor matrix operations.
+- Responsibility: Burst-compiled job struct definitions for tensor compute kernels.
 - Key public structs:
-  - `TransposeParallelJob : IJobParallelFor`
-  - `MatMulJob : IJob`
-  - `MatMulNaiveParallelJob : IJobParallelFor`
+  - `TransposeTiledParallelJob : IJobParallelFor` — cache-friendly tiled transpose (TILE=32)
+  - `MatMulNaiveParallelJob : IJobParallelFor` — naive matmul with pre-transposed B, supports accumulate mode
+  - `PackBPanelScalarParallelJob : IJobParallelFor` — packs B columns into NR=16-wide panels for GEBP
+  - `MatMulGebpScalarParallelJob : IJobParallelFor` — GEBP micro-kernel (MR=6, NR=16) parallelized over row groups
+  - `SumReductionJob : IJob` — single-threaded sum reduction to scalar
+  - `AddScalarParallelJob : IJobParallelFor` — broadcasts scalar add into target array
 - Core contracts:
+  - All structs decorated with `[BurstCompile(FloatMode.Fast, FloatPrecision.Low, DisableSafetyChecks=true, OptimizeFor=Performance)]`.
   - Operate on `NativeArray<float>` buffers.
+  - GEBP jobs use `KOffset` and `Kc` fields for Kc-blocked iteration over the K dimension.
   - `MatMulNaiveParallelJob` supports overwrite or accumulation mode (`Accumulate`) for backward gradients.
 - Main collaborators:
-  - Invoked from `Tensor.MatMul(...)` forward and backward paths.
+  - Scheduled by `TensorOps` static methods; not invoked directly from `Tensor`.
+
+### `TensorOps` (`Assets/ChaosRL/Autodiff/TensorOps.cs`)
+- Responsibility: Static scheduling orchestration for Burst job graphs, auto-selecting the optimal MatMul kernel.
+- Key public members/methods:
+  - Constants: `KC = 256` (K-block size for L1 residency), `GebpThreshold = 16` (min dimension for GEBP path)
+  - `GetBatchSize(int totalWorkItems)` — computes `IJobParallelFor` batch sizing based on worker thread count
+  - `ScheduleTranspose(...)` — schedules `TransposeTiledParallelJob` over tiles
+  - `ScheduleMatMul(...)` — unified entry point: auto-selects GEBP (dims ≥ 16) or naive path
+- Core contracts:
+  - GEBP path: loops K in KC-thick slices, packs B into panel layout via `PackBPanelScalarParallelJob`, runs `MatMulGebpScalarParallelJob`, auto-disposes packed buffers.
+  - Naive path: transposes B first, then runs `MatMulNaiveParallelJob`.
+  - Both paths support accumulation mode for backward gradient computation.
+- Main collaborators:
+  - Called by `Tensor.MatMul` forward and backward paths.
+  - Delegates to `TensorJobs` Burst job structs.
 
 ### `Value` (`Assets/ChaosRL/Autodiff/Value.cs`) (legacy/auxiliary path)
 - Responsibility: Scalar autodiff node for educational and benchmark comparison workflows.
@@ -308,7 +290,7 @@ Academy.UpdateNetworks
 |---|---|
 | Tensor elementwise math | `+`, `-`, `*`, `/`, `Pow`, `Sqrt`, `Exp`, `Log`, `ReLU`, `Tanh`, `Clamp`, elementwise `Max/Min` |
 | Tensor reduction ops | `Sum`, `Mean`, `Max` over full tensor or along selected dimension |
-| Matrix multiplication | 2D `MatMul` with job-based backend and backward gradients |
+| Matrix multiplication | 2D `MatMul` with GEBP kernel (MR=6, NR=16, KC=256), auto-fallback to naive for small dims, Burst-compiled forward and backward |
 | Shape/transformation ops | `Reshape`, `Slice`, `Unsqueeze`, `Squeeze`, `ExpandLast`, indexer access |
 | Autograd graph | Dynamic graph via `Children` and per-op backward closures; topological backward traversal |
 | Gradient control | `RequiresGrad` propagation to support training vs inference pathways |
@@ -335,6 +317,7 @@ Methodology characteristics:
   - Matrix multiplication and matrix multiplication with backward
   - Allocation-overhead-focused comparison scenario
 - Runtime benchmark UI focuses on matrix multiplication and matrix multiplication + backward across multiple matrix sizes.
+- Runtime benchmark UI also supports kernel comparison mode (GEBP vs Naive) across matrix sizes.
 
 The benchmark code is intended for relative implementation comparison and regression visibility, not as a cross-hardware absolute performance contract.
 
@@ -374,6 +357,7 @@ These are current capability boundaries explicitly visible in code contracts and
 Core architecture files:
 - `Assets/ChaosRL/Autodiff/Tensor.cs`
 - `Assets/ChaosRL/Autodiff/TensorJobs.cs`
+- `Assets/ChaosRL/Autodiff/TensorOps.cs`
 - `Assets/ChaosRL/Autodiff/Value.cs`
 - `Assets/ChaosRL/Autodiff/ValueExtensions.cs`
 - `Assets/ChaosRL/NN/Layer.cs`
