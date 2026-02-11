@@ -7,7 +7,6 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Jobs.LowLevel.Unsafe;
-using Unity.Profiling;
 
 namespace ChaosRL
 {
@@ -38,10 +37,6 @@ namespace ChaosRL
         private const int GebpMatMulThreshold = 16;
         private const int MinScheduleBatch = 1;
 
-        private static readonly ProfilerMarker sMatMulTransposeTimeMarker = new ProfilerMarker( "ChaosRL.MatMul.transpose_time" );
-        private static readonly ProfilerMarker sMatMulGemmTimeMarker = new ProfilerMarker( "ChaosRL.MatMul.gemm_time" );
-        private static readonly ProfilerMarker sMatMulBackwardDATimeMarker = new ProfilerMarker( "ChaosRL.MatMul.backward_dA_time" );
-        private static readonly ProfilerMarker sMatMulBackwardDBTimeMarker = new ProfilerMarker( "ChaosRL.MatMul.backward_dB_time" );
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
         {
@@ -614,45 +609,35 @@ namespace ChaosRL
 
             if (useGebp)
             {
-                using (sMatMulGemmTimeMarker.Auto())
-                {
-                    var mmHandle = ScheduleGebpMatMul(
-                        Data,
-                        other.Data,
-                        result.Data,
-                        M,
-                        K,
-                        N,
-                        accumulate: false );
+                var mmHandle = ScheduleGebpMatMul(
+                    Data,
+                    other.Data,
+                    result.Data,
+                    M,
+                    K,
+                    N,
+                    accumulate: false );
 
-                    mmHandle.Complete();
-                }
+                mmHandle.Complete();
             }
             else
             {
                 // Small matrix path: transpose B then use row/blocked kernel
                 using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
                 {
-                    JobHandle transposeHandle;
-                    using (sMatMulTransposeTimeMarker.Auto())
-                    {
-                        transposeHandle = ScheduleTranspose( other.Data, nativeBT, K, N );
-                    }
+                    var transposeHandle = ScheduleTranspose( other.Data, nativeBT, K, N );
 
-                    using (sMatMulGemmTimeMarker.Auto())
-                    {
-                        var mmHandle = ScheduleMatMul(
-                            Data,
-                            nativeBT,
-                            result.Data,
-                            M,
-                            K,
-                            N,
-                            accumulate: false,
-                            dependsOn: transposeHandle );
+                    var mmHandle = ScheduleMatMul(
+                        Data,
+                        nativeBT,
+                        result.Data,
+                        M,
+                        K,
+                        N,
+                        accumulate: false,
+                        dependsOn: transposeHandle );
 
-                        mmHandle.Complete();
-                    }
+                    mmHandle.Complete();
                 }
             }
 
@@ -673,34 +658,28 @@ namespace ChaosRL
                     // dL/dA = dC(MxN) @ B^T(NxK) => (MxK)
                     if (this.RequiresGrad)
                     {
-                        using (sMatMulBackwardDATimeMarker.Auto())
-                        {
-                            tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
-                            var tBH = ScheduleTranspose( other.Data, tempBT, K, N );
-                            dAHandle = ScheduleGebpMatMul(
-                                result.Grad, tempBT, Grad,
-                                M, N, K,
-                                accumulate: true,
-                                dependsOn: tBH );
-                            hasDa = true;
-                        }
+                        tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
+                        var tBH = ScheduleTranspose( other.Data, tempBT, K, N );
+                        dAHandle = ScheduleGebpMatMul(
+                            result.Grad, tempBT, Grad,
+                            M, N, K,
+                            accumulate: true,
+                            dependsOn: tBH );
+                        hasDa = true;
                     }
 
                     // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
                     // dC is already MxN row-major — no transpose needed!
                     if (other.RequiresGrad)
                     {
-                        using (sMatMulBackwardDBTimeMarker.Auto())
-                        {
-                            tempAT = new NativeArray<float>( Size, Allocator.TempJob );
-                            var tAH = ScheduleTranspose( Data, tempAT, M, K );
-                            dBHandle = ScheduleGebpMatMul(
-                                tempAT, result.Grad, other.Grad,
-                                K, M, N,
-                                accumulate: true,
-                                dependsOn: tAH );
-                            hasDb = true;
-                        }
+                        tempAT = new NativeArray<float>( Size, Allocator.TempJob );
+                        var tAH = ScheduleTranspose( Data, tempAT, M, K );
+                        dBHandle = ScheduleGebpMatMul(
+                            tempAT, result.Grad, other.Grad,
+                            K, M, N,
+                            accumulate: true,
+                            dependsOn: tAH );
+                        hasDb = true;
                     }
 
                     // Wait for both to complete concurrently
@@ -723,14 +702,11 @@ namespace ChaosRL
 
                     if (this.RequiresGrad)
                     {
-                        using (sMatMulBackwardDATimeMarker.Auto())
-                        {
-                            dAHandle = ScheduleMatMul(
-                                result.Grad, other.Data, Grad,
-                                M, N, K,
-                                accumulate: true );
-                            dAScheduled = true;
-                        }
+                        dAHandle = ScheduleMatMul(
+                            result.Grad, other.Data, Grad,
+                            M, N, K,
+                            accumulate: true );
+                        dAScheduled = true;
                     }
 
                     if (other.RequiresGrad)
@@ -739,22 +715,16 @@ namespace ChaosRL
                         using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
                         {
                             JobHandle tAHandle, tDCHandle;
-                            using (sMatMulTransposeTimeMarker.Auto())
-                            {
-                                tAHandle = ScheduleTranspose( Data, nativeAT, M, K );
-                                tDCHandle = ScheduleTranspose( result.Grad, nativeDCT, M, N );
-                            }
+                            tAHandle = ScheduleTranspose( Data, nativeAT, M, K );
+                            tDCHandle = ScheduleTranspose( result.Grad, nativeDCT, M, N );
 
                             JobHandle dBHandle;
-                            using (sMatMulBackwardDBTimeMarker.Auto())
-                            {
-                                var dBDeps = JobHandle.CombineDependencies( tAHandle, tDCHandle );
-                                dBHandle = ScheduleMatMul(
-                                    nativeAT, nativeDCT, other.Grad,
-                                    K, M, N,
-                                    accumulate: true,
-                                    dependsOn: dBDeps );
-                            }
+                            var dBDeps = JobHandle.CombineDependencies( tAHandle, tDCHandle );
+                            dBHandle = ScheduleMatMul(
+                                nativeAT, nativeDCT, other.Grad,
+                                K, M, N,
+                                accumulate: true,
+                                dependsOn: dBDeps );
 
                             if (dAScheduled)
                                 JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
