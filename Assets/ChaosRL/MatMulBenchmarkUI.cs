@@ -257,13 +257,11 @@ namespace ChaosRL
         {
             const int warmup = 3;
             const int iterations = 10;
-            // Skip painfully slow single-threaded job above this total element count.
-            const long singleThreadSkipThreshold = 512L * 512 * 512;
 
             var sb = new StringBuilder();
             sb.AppendLine( $"Kernel Comparison started at {DateTime.Now}" );
-            sb.AppendLine( "Forward-only MatMul \u2014 timing each Burst job in isolation" );
-            sb.AppendLine( "Numerical accuracy compared against Single-thread reference" );
+            sb.AppendLine( "Forward-only MatMul — timing each Burst job in isolation" );
+            sb.AppendLine( "Numerical accuracy compared against Naive Parallel reference" );
             sb.AppendLine();
 
             var sizes = new int[] { 64, 128, 256, 512, 1024, 2048 };
@@ -272,7 +270,6 @@ namespace ChaosRL
             {
                 int M = sz, K = sz, N = sz;
                 int outputLen = M * N;
-                long totalElements = (long)M * K * N;
                 double flops = 2.0 * M * K * N;
                 string sizeStr = $"{M}x{K} @ {K}x{N}";
 
@@ -286,7 +283,6 @@ namespace ChaosRL
                 var aData = new NativeArray<float>( M * K, Allocator.Persistent );
                 var bData = new NativeArray<float>( K * N, Allocator.Persistent );
                 var btData = new NativeArray<float>( K * N, Allocator.Persistent );
-                // Reference output (from single-thread) and per-kernel output
                 var cRef = new NativeArray<float>( outputLen, Allocator.Persistent );
                 var cData = new NativeArray<float>( outputLen, Allocator.Persistent );
 
@@ -306,61 +302,25 @@ namespace ChaosRL
                     }.Schedule( totalTiles, Math.Max( 1, totalTiles / 8 ) ).Complete();
                 }
 
-                // Pre-pack B into column-panel layout for GEBP
-                const int NR = MatMulGebpParallelJob.NR;
-                int numPanels = (N + NR - 1) / NR;
-                int packedSize = numPanels * K * NR;
-                var packedB = new NativeArray<float>( packedSize, Allocator.Persistent );
+                // --- Compute reference output using Naive Parallel ---
                 {
-                    new PackBPanelParallelJob
+                    int count = M * N;
+                    int batch = ComputeBatchSize( count );
+                    new MatMulNaiveParallelJob
                     {
-                        B = bData,
-                        PackedB = packedB,
+                        A = aData,
+                        BT = btData,
+                        C = cRef,
+                        M = M,
                         K = K,
-                        N = N
-                    }.Schedule( numPanels, Math.Max( 1, numPanels / 8 ) ).Complete();
+                        N = N,
+                        Accumulate = false
+                    }.Schedule( count, batch ).Complete();
                 }
-
-                // --- Compute reference output using single-thread job (always, for accuracy comparison) ---
-                // For large sizes where single-thread is too slow for full benchmark,
-                // still run it once for the reference, just skip the timed iterations.
-                new MatMulJob
-                {
-                    A = aData,
-                    B = btData,
-                    C = cRef,
-                    M = M,
-                    K = K,
-                    N = N
-                }.Run();
 
                 try
                 {
-                    // 1. Single-threaded MatMulJob
-                    if (totalElements <= singleThreadSkipThreshold)
-                    {
-                        double ms = BenchmarkAction( warmup, iterations, () =>
-                        {
-                            new MatMulJob
-                            {
-                                A = aData,
-                                B = btData,
-                                C = cData,
-                                M = M,
-                                K = K,
-                                N = N
-                            }.Run();
-                        } );
-                        double gf = (flops / (ms / 1000.0)) / 1e9;
-                        sb.AppendLine( $"  {"Single-thread",-24} {ms,10:F3} {gf,10:F2} {"(reference)",12} {"—",12}" );
-                    }
-                    else
-                    {
-                        sb.AppendLine( $"  {"Single-thread",-24} {"(skipped)",10} {"\u2014",10} {"(reference)",12} {"\u2014",12}" );
-                    }
-                    _benchmarkResults = sb.ToString();
-
-                    // 2. Naive Parallel (per-element)
+                    // 1. Naive Parallel (per-element)
                     {
                         int count = M * N;
                         int batch = ComputeBatchSize( count );
@@ -378,103 +338,30 @@ namespace ChaosRL
                             }.Schedule( count, batch ).Complete();
                         } );
                         double gf = (flops / (ms / 1000.0)) / 1e9;
-                        var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );
-                        sb.AppendLine( $"  {"Naive Parallel",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
+                        sb.AppendLine( $"  {"Naive Parallel",-24} {ms,10:F3} {gf,10:F2} {"(reference)",12} {"—",12}" );
                     }
                     _benchmarkResults = sb.ToString();
 
-                    // 3. Row Parallel (per-row)
+                    // 2. GEBP (Burst auto-vectorized pack + matmul)
                     {
-                        int batch = ComputeBatchSize( M );
-                        double ms = BenchmarkAction( warmup, iterations, () =>
-                        {
-                            new MatMulRowParallelJob
-                            {
-                                A = aData,
-                                BT = btData,
-                                C = cData,
-                                M = M,
-                                K = K,
-                                N = N,
-                                Accumulate = false
-                            }.Schedule( M, batch ).Complete();
-                        } );
-                        double gf = (flops / (ms / 1000.0)) / 1e9;
-                        var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );
-                        sb.AppendLine( $"  {"Row Parallel",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
-                    }
-                    _benchmarkResults = sb.ToString();
-
-                    // 4. Blocked Parallel (tile-parallel)
-                    {
-                        int tilesM = (M + MatMulBlockedParallelJob.TM - 1) / MatMulBlockedParallelJob.TM;
-                        int tilesN = (N + MatMulBlockedParallelJob.TN - 1) / MatMulBlockedParallelJob.TN;
-                        int totalTiles = tilesM * tilesN;
-                        int batch = ComputeBatchSize( totalTiles );
-                        double ms = BenchmarkAction( warmup, iterations, () =>
-                        {
-                            new MatMulBlockedParallelJob
-                            {
-                                A = aData,
-                                BT = btData,
-                                C = cData,
-                                M = M,
-                                K = K,
-                                N = N,
-                                Accumulate = false
-                            }.Schedule( totalTiles, batch ).Complete();
-                        } );
-                        double gf = (flops / (ms / 1000.0)) / 1e9;
-                        var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );
-                        sb.AppendLine( $"  {"Blocked",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
-                    }
-                    _benchmarkResults = sb.ToString();
-
-                    // 5. GEBP Scalar (Burst auto-vectorized pack + matmul, no manual SIMD)
-                    {
-                        // Pack B using the scalar packer (no intrinsics).
-                        const int NR_S = PackBPanelScalarParallelJob.NR;
-                        int numPanelsS = (N + NR_S - 1) / NR_S;
-                        int packedSizeS = numPanelsS * K * NR_S;
-                        var packedBScalar = new NativeArray<float>( packedSizeS, Allocator.TempJob,
+                        const int NR = PackBPanelScalarParallelJob.NR;
+                        int numPanels = (N + NR - 1) / NR;
+                        int packedSize = numPanels * K * NR;
+                        var packedB = new NativeArray<float>( packedSize, Allocator.TempJob,
                             NativeArrayOptions.ClearMemory );
                         new PackBPanelScalarParallelJob
                         {
                             B = bData,
-                            PackedB = packedBScalar,
+                            PackedB = packedB,
                             K = K,
                             N = N
-                        }.Schedule( numPanelsS, Math.Max( 1, numPanelsS / 8 ) ).Complete();
+                        }.Schedule( numPanels, Math.Max( 1, numPanels / 8 ) ).Complete();
 
                         int rowGroups = (M + MatMulGebpScalarParallelJob.MR - 1) / MatMulGebpScalarParallelJob.MR;
                         int batch = ComputeBatchSize( rowGroups );
                         double ms = BenchmarkAction( warmup, iterations, () =>
                         {
                             new MatMulGebpScalarParallelJob
-                            {
-                                A = aData,
-                                PackedB = packedBScalar,
-                                C = cData,
-                                M = M,
-                                K = K,
-                                N = N,
-                                Accumulate = false
-                            }.Schedule( rowGroups, batch ).Complete();
-                        } );
-                        double gf = (flops / (ms / 1000.0)) / 1e9;
-                        var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );
-                        sb.AppendLine( $"  {"GEBP (Burst Auto)",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
-                        packedBScalar.Dispose();
-                    }
-                    _benchmarkResults = sb.ToString();
-
-                    // 6. GEBP FMA (panel-packed micro-kernel, manual intrinsics)
-                    {
-                        int rowGroups = (M + MatMulGebpParallelJob.MR - 1) / MatMulGebpParallelJob.MR;
-                        int batch = ComputeBatchSize( rowGroups );
-                        double ms = BenchmarkAction( warmup, iterations, () =>
-                        {
-                            new MatMulGebpParallelJob
                             {
                                 A = aData,
                                 PackedB = packedB,
@@ -487,7 +374,8 @@ namespace ChaosRL
                         } );
                         double gf = (flops / (ms / 1000.0)) / 1e9;
                         var (maxErr, avgErr) = CompareOutputs( cRef, cData, outputLen );
-                        sb.AppendLine( $"  {"GEBP (FMA Manual)",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
+                        sb.AppendLine( $"  {"GEBP",-24} {ms,10:F3} {gf,10:F2} {maxErr,12:E2} {avgErr,12:E2}" );
+                        packedB.Dispose();
                     }
                     _benchmarkResults = sb.ToString();
                 }
@@ -498,7 +386,6 @@ namespace ChaosRL
                     btData.Dispose();
                     cRef.Dispose();
                     cData.Dispose();
-                    packedB.Dispose();
                 }
 
                 sb.AppendLine();

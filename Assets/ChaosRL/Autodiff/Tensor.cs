@@ -35,8 +35,6 @@ namespace ChaosRL
         private Action _backward;
         private bool _disposed;
 
-        private static readonly bool UseLegacyNaiveMatMulKernel = false;
-        private const int LargeMatMulThreshold = 32;
         private const int GebpMatMulThreshold = 16;
         private const int MinScheduleBatch = 1;
 
@@ -519,50 +517,8 @@ namespace ChaosRL
             bool accumulate,
             JobHandle dependsOn = default )
         {
-            if (UseLegacyNaiveMatMulKernel)
-            {
-                int totalElements = m * n;
-                var naiveJob = new MatMulNaiveParallelJob
-                {
-                    A = a,
-                    BT = bt,
-                    C = c,
-                    M = m,
-                    K = k,
-                    N = n,
-                    Accumulate = accumulate
-                };
-
-                int batch = GetBatchSize( totalElements );
-                return naiveJob.Schedule( totalElements, batch, dependsOn );
-            }
-
-            bool useBlocked = m >= LargeMatMulThreshold &&
-                              k >= LargeMatMulThreshold &&
-                              n >= LargeMatMulThreshold;
-
-            if (useBlocked)
-            {
-                int tilesM = (m + MatMulBlockedParallelJob.TM - 1) / MatMulBlockedParallelJob.TM;
-                int tilesN = (n + MatMulBlockedParallelJob.TN - 1) / MatMulBlockedParallelJob.TN;
-                int totalTiles = tilesM * tilesN;
-
-                var blockedJob = new MatMulBlockedParallelJob
-                {
-                    A = a,
-                    BT = bt,
-                    C = c,
-                    M = m,
-                    K = k,
-                    N = n,
-                    Accumulate = accumulate
-                };
-
-                int batch = GetBatchSize( totalTiles );
-                return blockedJob.Schedule( totalTiles, batch, dependsOn );
-            }
-
-            var rowJob = new MatMulRowParallelJob
+            int totalElements = m * n;
+            var naiveJob = new MatMulNaiveParallelJob
             {
                 A = a,
                 BT = bt,
@@ -573,14 +529,14 @@ namespace ChaosRL
                 Accumulate = accumulate
             };
 
-            int rowBatch = GetBatchSize( m );
-            return rowJob.Schedule( m, rowBatch, dependsOn );
+            int batch = GetBatchSize( totalElements );
+            return naiveJob.Schedule( totalElements, batch, dependsOn );
         }
         //------------------------------------------------------------------
         /// <summary>
         /// Schedules a GEBP MatMul: C(m×n) = A(m×k) @ B(k×n).
         /// B must be in ORIGINAL row-major layout (NOT transposed).
-        /// Packs B into column-panel layout once, then runs FMA micro-kernels
+        /// Packs B into column-panel layout once, then runs GEBP micro-kernels
         /// that read the packed buffer sequentially for full L1 throughput.
         /// The packed buffer is auto-disposed when the returned handle completes.
         /// </summary>
@@ -594,14 +550,14 @@ namespace ChaosRL
             bool accumulate,
             JobHandle dependsOn = default )
         {
-            const int NR = MatMulGebpParallelJob.NR;
+            const int NR = PackBPanelScalarParallelJob.NR;
             int numPanels = (n + NR - 1) / NR;
             int packedSize = numPanels * k * NR;
 
             var packedB = new NativeArray<float>( packedSize, Allocator.TempJob );
 
             // Phase 1: Pack B into column-panel layout (parallel over panels)
-            var packJob = new PackBPanelParallelJob
+            var packJob = new PackBPanelScalarParallelJob
             {
                 B = b,
                 PackedB = packedB,
@@ -612,8 +568,8 @@ namespace ChaosRL
             var packHandle = packJob.Schedule( numPanels, packBatch, dependsOn );
 
             // Phase 2: GEBP micro-kernels read from packed B (parallel over row-groups)
-            int rowGroups = (m + MatMulGebpParallelJob.MR - 1) / MatMulGebpParallelJob.MR;
-            var gebpJob = new MatMulGebpParallelJob
+            int rowGroups = (m + MatMulGebpScalarParallelJob.MR - 1) / MatMulGebpScalarParallelJob.MR;
+            var gebpJob = new MatMulGebpScalarParallelJob
             {
                 A = a,
                 PackedB = packedB,
