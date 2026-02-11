@@ -499,7 +499,6 @@ namespace ChaosRL
             {
                 JobHandle dAHandle = default, dBHandle = default;
                 NativeArray<float> tempBT = default, tempAT = default;
-                bool hasDa = false, hasDb = false;
 
                 if (this.RequiresGrad)
                 {
@@ -508,7 +507,6 @@ namespace ChaosRL
                     dAHandle = TensorOps.ScheduleMatMul(
                         result.Grad, tempBT, Grad,
                         M, N, K, accumulate: true, dependsOn: tBH );
-                    hasDa = true;
                 }
 
                 if (other.RequiresGrad)
@@ -518,15 +516,9 @@ namespace ChaosRL
                     dBHandle = TensorOps.ScheduleMatMul(
                         tempAT, result.Grad, other.Grad,
                         K, M, N, accumulate: true, dependsOn: tAH );
-                    hasDb = true;
                 }
 
-                if (hasDa && hasDb)
-                    JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
-                else if (hasDa)
-                    dAHandle.Complete();
-                else if (hasDb)
-                    dBHandle.Complete();
+                JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
 
                 if (tempBT.IsCreated) tempBT.Dispose();
                 if (tempAT.IsCreated) tempAT.Dispose();
