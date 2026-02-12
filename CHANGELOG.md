@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-02-11
+
+### Added
+- GEBP (Generalized Efficient Panel-Block) MatMul kernel with MR=6, NR=16 micro-tiles
+- Kc blocking (KC=256) for L1 cache residency in GEBP kernel
+- `TensorOps` static class — unified Burst job scheduling orchestration
+- `PackBPanelScalarParallelJob` — packs B into NR-wide column-panel layout for GEBP
+- `MatMulGebpScalarParallelJob` — Burst GEBP micro-kernel parallelized over MR-row groups
+- `SumReductionJob` — Burst-compiled sum reduction (replaces managed loop)
+- `AddScalarParallelJob` — Burst-compiled scalar broadcast for Sum backward
+
+### Changed
+- MatMul 2048² performance: **254 → 546 GFLOP/s** (~2.15× speedup)
+- `Tensor.MatMul` forward/backward delegates to `TensorOps.ScheduleMatMul` (auto-selects GEBP or naive based on dimension threshold)
+- `Tensor.ZeroGrad()` uses `UnsafeUtility.MemClear` instead of managed loop
+- `Tensor.Backward()` seed uses `UnsafeUtility.MemCpyReplicate` instead of managed loop
+- `Tensor.Sum()` forward/backward replaced with Burst jobs
+- `TransposeParallelJob` replaced by `TransposeTiledParallelJob` with TILE=32 cache blocking
+- `MatMulJob` (IJob) replaced by parallelized GEBP and naive kernels
+
+### Removed
+- `TransposeParallelJob` (superseded by `TransposeTiledParallelJob`)
+- `MatMulJob` (superseded by `MatMulGebpScalarParallelJob`)
+
 ## [0.2.0] - 2025-11-20
 
 ### Added

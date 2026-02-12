@@ -4,6 +4,7 @@ using System.Text;
 
 using Unity.Burst;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 
 namespace ChaosRL
@@ -31,6 +32,7 @@ namespace ChaosRL
         private Tensor _storageOwner;
         private Action _backward;
         private bool _disposed;
+
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
         {
@@ -463,6 +465,7 @@ namespace ChaosRL
             };
             return result;
         }
+
         //------------------------------------------------------------------
         /// <summary>
         /// Matrix multiplication: (M×K) @ (K×N) -> (M×N)
@@ -470,124 +473,55 @@ namespace ChaosRL
         /// </summary>
         public Tensor MatMul( Tensor other )
         {
-            // Validate 2D tensors
             if (Shape.Length != 2 || other.Shape.Length != 2)
                 throw new ArgumentException( "MatMul requires 2D tensors" );
 
-            int M = Shape[ 0 ]; // rows of this
-            int K = Shape[ 1 ]; // cols of this / rows of other
-            int N = other.Shape[ 1 ]; // cols of other
+            int M = Shape[ 0 ];
+            int K = Shape[ 1 ];
+            int N = other.Shape[ 1 ];
 
             if (other.Shape[ 0 ] != K)
-                throw new ArgumentException( $"Inner dimensions must match: ({M}×{K}) @ ({other.Shape[ 0 ]}×{N})" );
+                throw new ArgumentException( $"Inner dimensions must match: ({M}x{K}) @ ({other.Shape[ 0 ]}x{N})" );
 
             var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
 
-            // Forward pass: C = A(MxK) @ B(KxN)
-            // Multi-threaded naive GEMM (parallelized over output elements), 
-            // so the inner loop reads contiguous memory from BT.
-            using (var nativeBT = new NativeArray<float>( other.Size, Allocator.TempJob ))
-            {
-                // To allow contiguous reads, we transpose B into BT (N x K)
-                // that makes matmul cache friendly
-                var tJob = new TransposeParallelJob
-                {
-                    Input = other.Data,
-                    Output = nativeBT,
-                    Rows = K,
-                    Cols = N
-                };
-
-                var tHandle = tJob.Schedule( K * N, 64 );
-
-                var mmJob = new MatMulNaiveParallelJob
-                {
-                    A = Data,
-                    BT = nativeBT,
-                    C = result.Data,
-                    M = M,
-                    K = K,
-                    N = N,
-                    Accumulate = false
-                };
-
-                // Batch size is a tradeoff between scheduling overhead and load balancing.
-                mmJob.Schedule( M * N, 32, tHandle ).Complete();
-            }
+            // Forward: C = A @ B
+            TensorOps.ScheduleMatMul(
+                Data, other.Data, result.Data,
+                M, K, N, accumulate: false ).Complete();
 
             result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;
             if (result.RequiresGrad == false)
                 return result;
 
-            // Backward pass
+            // Backward: dA = dC @ B^T, dB = A^T @ dC
             result._backward = () =>
             {
-                JobHandle aHandle = default;
+                JobHandle dAHandle = default, dBHandle = default;
+                NativeArray<float> tempBT = default, tempAT = default;
 
-                // dL/dA = dC(MxN) @ B^T(NxK)
-                // Use MatMulNaiveParallelJob by treating BT as transpose(secondOperand).
-                // secondOperand is B^T, so BT is (B^T)^T = B (KxN), which is already row-major in other.Data.
                 if (this.RequiresGrad)
                 {
-                    var dAJob = new MatMulNaiveParallelJob
-                    {
-                        A = result.Grad,   // M x N
-                        BT = other.Data,   // K x N  (acts as BT when N_out=K and K_in=N)
-                        C = Grad,          // M x K
-                        M = M,
-                        K = N,
-                        N = K,
-                        Accumulate = true
-                    };
-
-                    aHandle = dAJob.Schedule( M * K, 32 );
+                    tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
+                    var tBH = TensorOps.ScheduleTranspose( other.Data, tempBT, K, N );
+                    dAHandle = TensorOps.ScheduleMatMul(
+                        result.Grad, tempBT, Grad,
+                        M, N, K, accumulate: true, dependsOn: tBH );
                 }
 
-                // dL/dB = A^T(KxM) @ dC(MxN) => (KxN)
-                // For cache friendliness, transpose A and dC so the inner loop reads contiguous memory.
                 if (other.RequiresGrad)
                 {
-                    using (var nativeAT = new NativeArray<float>( Size, Allocator.TempJob ))
-                    using (var nativeDCT = new NativeArray<float>( result.Size, Allocator.TempJob ))
-                    {
-                        var tAJob = new TransposeParallelJob
-                        {
-                            Input = Data,
-                            Output = nativeAT,
-                            Rows = M,
-                            Cols = K
-                        };
-
-                        var tDCJob = new TransposeParallelJob
-                        {
-                            Input = result.Grad,
-                            Output = nativeDCT,
-                            Rows = M,
-                            Cols = N
-                        };
-
-                        var tAHandle = tAJob.Schedule( M * K, 64, aHandle );
-                        var tDCHandle = tDCJob.Schedule( M * N, 64, aHandle );
-
-                        var dep = JobHandle.CombineDependencies( tAHandle, tDCHandle );
-
-                        var dBJob = new MatMulNaiveParallelJob
-                        {
-                            A = nativeAT,      // K x M
-                            BT = nativeDCT,    // N x M (transpose of dC)
-                            C = other.Grad,    // K x N
-                            M = K,
-                            K = M,
-                            N = N,
-                            Accumulate = true
-                        };
-
-                        dBJob.Schedule( K * N, 32, dep ).Complete();
-                        return;
-                    }
+                    tempAT = new NativeArray<float>( Size, Allocator.TempJob );
+                    var tAH = TensorOps.ScheduleTranspose( Data, tempAT, M, K );
+                    dBHandle = TensorOps.ScheduleMatMul(
+                        tempAT, result.Grad, other.Grad,
+                        K, M, N, accumulate: true, dependsOn: tAH );
                 }
 
-                aHandle.Complete();
+                JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
+
+                if (tempBT.IsCreated) tempBT.Dispose();
+                if (tempAT.IsCreated) tempAT.Dispose();
             };
 
             return result;
@@ -600,10 +534,8 @@ namespace ChaosRL
         {
             var result = new Tensor( new[] { 1 }, new[] { this }, "sum" );
 
-            float sum = 0f;
-            for (int i = 0; i < Size; i++)
-                sum += Data[ i ];
-            result.Data[ 0 ] = sum;
+            // Burst-compiled reduction — avoids per-element NativeArray safety checks in Editor.
+            new SumReductionJob { Input = Data, Output = result.Data }.Run();
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -611,9 +543,13 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                // Gradient broadcasts to all input elements
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += result.Grad[ 0 ];
+                // Burst-compiled scalar broadcast — avoids 2N managed array accesses.
+                float gradVal = result.Grad[ 0 ];
+                new AddScalarParallelJob
+                {
+                    Target = Grad,
+                    Value = gradVal
+                }.Schedule( Size, TensorOps.GetBatchSize( Size ) ).Complete();
             };
 
             return result;
@@ -1211,18 +1147,25 @@ namespace ChaosRL
 
             BuildTopo( this );
 
-            for (int i = 0; i < Grad.Length; i++)
-                Grad[ i ] = 1f;
+            // Burst-safe fill: write 1.0f to all grad elements without managed indexing.
+            unsafe
+            {
+                float one = 1f;
+                UnsafeUtility.MemCpyReplicate(
+                    NativeArrayUnsafeUtility.GetUnsafePtr( Grad ),
+                    &one, sizeof( float ), Grad.Length );
+            }
 
             topo.Reverse();
             foreach (var t in topo)
                 t._backward?.Invoke();
         }
         //------------------------------------------------------------------
-        public void ZeroGrad()
+        public unsafe void ZeroGrad()
         {
-            for (int i = 0; i < Grad.Length; i++)
-                Grad[ i ] = 0f;
+            UnsafeUtility.MemClear(
+                NativeArrayUnsafeUtility.GetUnsafePtr( Grad ),
+                Grad.Length * sizeof( float ) );
         }
         //------------------------------------------------------------------
         public override string ToString()

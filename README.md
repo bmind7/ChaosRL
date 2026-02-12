@@ -32,6 +32,7 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 ### 💻 Code to look at
 - **Value.cs** simple implementation of AutoDiff, easy to understand 
 - **Tensor.cs** data oriented implementation of AutoDiff
+- **TensorOps.cs** GEBP algorithm orchestration and Burst job scheduling
 - **Academy.cs** PPO implementation
 
 ---
@@ -40,7 +41,7 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 - ~~Tensor class with better data layout~~ (**200x-400x** speedup of MatMul)
 - ~~Backend with vectorized ops (CPU)~~ (**50x** speedup)
 - ~~Multithreading support for simulation and training~~ (**8x** speedup)
-- **K-Blocking** support for MatMul with fused Mult + Add operations (that should close the gap with PyTorch)
+- ~~GEBP MatMul kernel with packed B panels and Kc blocking~~ (**2.15×** speedup, now matches PyTorch at 2048²)
 - Refactor agent code to support batching during inference
 - **Compute shader** backend (GPU)
 - Core plumbing: Agents, Academy, Save/Load, Configs, Telemetry
@@ -49,15 +50,15 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 
 ### Benchmarks
 
-**ChaosRL** MatMul
+**ChaosRL** MatMul + Backward
 | Matrix Size           | Avg Time (ms) | Std Dev (ms) | GFLOPS |
 | --------------------- | ------------- | ------------ | ------ |
-| 64×64 @ 64×64         | 0.078         | 0.008        | 20.28  |
-| 128×128 @ 128×128     | 0.260         | 0.021        | 48.39  |
-| 256×256 @ 256×256     | 1.004         | 0.059        | 100.28 |
-| 512×512 @ 512×512     | 3.481         | 0.177        | 231.32 |
-| 1024×1024 @ 1024×1024 | 27.856        | 0.971        | 231.28 |
-| 2048×2048 @ 2048×2048 | 202.621       | 3.737        | 254.36 |
+| 64×64 @ 64×64         | 0.067         | 0.010        | 23.51  |
+| 128×128 @ 128×128     | 0.142         | 0.020        | 88.68  |
+| 256×256 @ 256×256     | 0.414         | 0.047        | 243.13 |
+| 512×512 @ 512×512     | 1.822         | 0.123        | 441.99 |
+| 1024×1024 @ 1024×1024 | 11.263        | 0.143        | 572.00 |
+| 2048×2048 @ 2048×2048 | 87.049        | 1.299        | 592.08 |
 
 **PyTorch** MatMul
 | Matrix Size           | Avg Time (ms) | Std Dev (ms) | GFLOPS |
