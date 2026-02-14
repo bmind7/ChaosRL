@@ -116,6 +116,8 @@ namespace ChaosRL
             RequiresGrad = requiresGrad;
             Backend = ResolveBackend( device );
             _backward = null;
+
+            TensorScope.Track( this );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -147,6 +149,8 @@ namespace ChaosRL
                     Children.Add( child );
             RequiresGrad = requiresGrad;
             _backward = null;
+
+            TensorScope.Track( this );
         }
         //------------------------------------------------------------------
         public Tensor( int[] shape, Tensor[] children, string name = "",

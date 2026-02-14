@@ -2,7 +2,7 @@ using NUnit.Framework;
 
 namespace ChaosRL.Tests
 {
-    public class AdamOptimizerTests
+    public class AdamOptimizerTests : TensorScopedTestBase
     {
         //------------------------------------------------------------------
         [Test]
@@ -11,7 +11,7 @@ namespace ChaosRL.Tests
             var parameter = new Tensor( new[] { 1 }, new[] { 1.0f } );
             parameter.Grad[ 0 ] = 1.0f;
 
-            var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
 
             optimizer.Step( 0.1f );
 
@@ -26,7 +26,7 @@ namespace ChaosRL.Tests
             parameter.Grad[ 1 ] = 2.0f;
             parameter.Grad[ 2 ] = 3.0f;
 
-            var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
 
             optimizer.Step( 0.1f );
 
@@ -44,7 +44,7 @@ namespace ChaosRL.Tests
             parameter.Grad[ 2 ] = 1.5f;
             parameter.Grad[ 3 ] = 2.0f;
 
-            var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
 
             optimizer.Step( 0.1f );
 
@@ -66,7 +66,7 @@ namespace ChaosRL.Tests
             param2.Grad[ 0 ] = 2.0f;
             param2.Grad[ 1 ] = 2.0f;
 
-            var optimizer = new AdamOptimizer( new[] { new[] { param1, param2 } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { param1, param2 } } );
 
             optimizer.Step( 0.1f );
 
@@ -80,7 +80,7 @@ namespace ChaosRL.Tests
         public void Step_WithMultipleSteps_AccumulatesMomentum()
         {
             var parameter = new Tensor( new[] { 1 }, new[] { 0.0f } );
-            var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
 
             // First step
             parameter.Grad[ 0 ] = 1.0f;
@@ -102,7 +102,7 @@ namespace ChaosRL.Tests
         public void ResetState_ZeroesMomentsAndBiasPowers()
         {
             var parameter = new Tensor( new[] { 1 }, new[] { 0.0f } );
-            var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
 
             // Take two steps to build up momentum
             parameter.Grad[ 0 ] = 1.0f;
@@ -128,7 +128,7 @@ namespace ChaosRL.Tests
             var param2 = new Tensor( new[] { 1 }, new[] { 2.0f } );
             var param3 = new Tensor( new[] { 1 }, new[] { 3.0f } );
 
-            var optimizer = new AdamOptimizer( new[] {
+            using var optimizer = new AdamOptimizer( new[] {
                 new[] { param1, param2 },
                 new[] { param3 }
             } );
@@ -151,8 +151,8 @@ namespace ChaosRL.Tests
             var parameter1 = new Tensor( new[] { 1 }, new[] { 0.0f } );
             var parameter2 = new Tensor( new[] { 1 }, new[] { 0.0f } );
 
-            var optimizer1 = new AdamOptimizer( new[] { new[] { parameter1 } }, beta1: 0.9f, beta2: 0.999f );
-            var optimizer2 = new AdamOptimizer( new[] { new[] { parameter2 } }, beta1: 0.5f, beta2: 0.9f );
+            using var optimizer1 = new AdamOptimizer( new[] { new[] { parameter1 } }, beta1: 0.9f, beta2: 0.999f );
+            using var optimizer2 = new AdamOptimizer( new[] { new[] { parameter2 } }, beta1: 0.5f, beta2: 0.9f );
 
             // Take multiple steps - first step is the same due to bias correction
             // but subsequent steps will differ due to momentum accumulation
@@ -178,7 +178,7 @@ namespace ChaosRL.Tests
             parameter.Grad[ 0 ] = 0.0f;
             parameter.Grad[ 1 ] = 0.0f;
 
-            var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { parameter } } );
             optimizer.Step( 0.1f );
 
             Assert.That( parameter.Data[ 0 ], Is.EqualTo( 1.0f ).Within( 1e-6f ) );
@@ -201,7 +201,7 @@ namespace ChaosRL.Tests
             matrix.Grad[ 2 ] = 1.0f;
             matrix.Grad[ 3 ] = 1.0f;
 
-            var optimizer = new AdamOptimizer( new[] { new[] { scalar, vector, matrix } } );
+            using var optimizer = new AdamOptimizer( new[] { new[] { scalar, vector, matrix } } );
             optimizer.Step( 0.1f );
 
             Assert.That( scalar.Data[ 0 ], Is.EqualTo( 0.9f ).Within( 1e-6f ) );

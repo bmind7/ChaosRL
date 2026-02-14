@@ -6,7 +6,7 @@ using System.Diagnostics;
 
 namespace ChaosRL.Tests
 {
-    public class TensorTests
+    public class TensorTests : TensorScopedTestBase
     {
         //------------------------------------------------------------------
         [Test]

@@ -7,7 +7,7 @@ namespace ChaosRL
     /// Multi-layer perceptron using Tensor for efficient batch processing.
     /// Chains multiple Layer instances to create a deep neural network.
     /// </summary>
-    public class MLP
+    public class MLP : IDisposable
     {
         //------------------------------------------------------------------
         public readonly int NumInputs;
@@ -25,6 +25,7 @@ namespace ChaosRL
         }
 
         private readonly Layer[] _layers;
+        private bool _disposed;
         //------------------------------------------------------------------
         /// <summary>
         /// Creates a multi-layer perceptron with specified architecture.
@@ -64,6 +65,8 @@ namespace ChaosRL
         /// <returns>Output tensor of shape (batch_size, num_outputs)</returns>
         public Tensor Forward( Tensor input )
         {
+            ThrowIfDisposed();
+
             if (input.Shape.Length != 2)
                 throw new ArgumentException( $"Expected 2D input tensor, got shape [{string.Join( ", ", input.Shape )}]" );
 
@@ -83,8 +86,26 @@ namespace ChaosRL
         /// </summary>
         public void ZeroGrad()
         {
+            ThrowIfDisposed();
+
             foreach (var layer in _layers)
                 layer.ZeroGrad();
+        }
+        //------------------------------------------------------------------
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            foreach (var layer in _layers)
+                layer.Dispose();
+        }
+        //------------------------------------------------------------------
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException( nameof( MLP ) );
         }
         //------------------------------------------------------------------
         public override string ToString()
