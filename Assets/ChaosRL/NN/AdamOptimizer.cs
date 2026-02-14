@@ -55,6 +55,11 @@ namespace ChaosRL
             _step = 0;
         }
         //------------------------------------------------------------------
+        ~AdamOptimizer()
+        {
+            Dispose( false );
+        }
+        //------------------------------------------------------------------
         public void Step( float learningRate )
         {
             _step++;
@@ -89,6 +94,12 @@ namespace ChaosRL
         }
         //------------------------------------------------------------------
         public void Dispose()
+        {
+            Dispose( true );
+            GC.SuppressFinalize( this );
+        }
+        //------------------------------------------------------------------
+        private void Dispose( bool disposing )
         {
             if (_disposed)
                 return;
