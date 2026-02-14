@@ -38,7 +38,7 @@ namespace ChaosRL
                 throw new ArgumentException( $"GetMinibatch only supports 1D or 2D tensors, got {source.Shape.Length}D" );
             }
 
-            var result = new Tensor( resultShape, requiresGrad: false );
+            var result = new Tensor( resultShape, requiresGrad: false, device: source.Device );
 
             if (source.Shape.Length == 2)
             {

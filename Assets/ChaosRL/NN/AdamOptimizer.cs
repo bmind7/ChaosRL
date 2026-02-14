@@ -3,21 +3,22 @@ using System.Collections.Generic;
 
 namespace ChaosRL
 {
-    public class AdamOptimizer
+    public class AdamOptimizer : IDisposable
     {
         //------------------------------------------------------------------
         public IReadOnlyList<Tensor> Parameters => _parameters;
 
         private readonly Tensor[] _parameters;
         private readonly int[] _parameterOffsets;
-        private readonly float[] _m;
-        private readonly float[] _v;
+        private TensorStorage _m;
+        private TensorStorage _v;
         private readonly float _beta1;
         private readonly float _beta2;
         private readonly float _epsilon;
         private float _beta1Pow = 1f;
         private float _beta2Pow = 1f;
         private long _step = 0;
+        private bool _disposed;
         //------------------------------------------------------------------
         public AdamOptimizer( IEnumerable<IEnumerable<Tensor>> parameterGroups, float beta1 = 0.9f, float beta2 = 0.999f, float epsilon = 1e-8f )
         {
@@ -43,8 +44,8 @@ namespace ChaosRL
                 totalSize += _parameters[ i ].Size;
             }
 
-            _m = new float[ totalSize ];
-            _v = new float[ totalSize ];
+            _m = TensorStorage.Allocate( totalSize );
+            _v = TensorStorage.Allocate( totalSize );
 
             _beta1 = beta1;
             _beta2 = beta2;
@@ -68,31 +69,36 @@ namespace ChaosRL
                 var parameter = _parameters[ i ];
                 int offset = _parameterOffsets[ i ];
 
-                // Update moments element-wise
-                for (int j = 0; j < parameter.Size; j++)
-                {
-                    int idx = offset + j;
-                    float grad = parameter.Grad[ j ];
-
-                    _m[ idx ] = _beta1 * _m[ idx ] + (1 - _beta1) * grad;
-                    _v[ idx ] = _beta2 * _v[ idx ] + (1 - _beta2) * grad * grad;
-
-                    float mHat = _m[ idx ] * invBias1;
-                    float vHat = _v[ idx ] * invBias2;
-
-                    parameter.Data[ j ] -= learningRate * mHat / (MathF.Sqrt( vHat ) + _epsilon);
-                }
+                var backend = parameter.Backend;
+                backend.AdamStep(
+                    parameter.DataStorage, parameter.GradStorage, _m, _v,
+                    parameter.Size, offset,
+                    learningRate, _beta1, _beta2, _epsilon,
+                    invBias1, invBias2 );
             }
         }
         //------------------------------------------------------------------
         public void ResetState()
         {
-            Array.Clear( _m, 0, _m.Length );
-            Array.Clear( _v, 0, _v.Length );
+            _m?.Clear();
+            _v?.Clear();
 
             _beta1Pow = 1f;
             _beta2Pow = 1f;
             _step = 0;
+        }
+        //------------------------------------------------------------------
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
+            _m?.Release();
+            _v?.Release();
+            _m = null;
+            _v = null;
         }
         //------------------------------------------------------------------
     }

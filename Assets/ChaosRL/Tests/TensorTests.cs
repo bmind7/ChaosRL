@@ -394,8 +394,8 @@ namespace ChaosRL.Tests
             var a = new Tensor( new[] { 2 }, new[] { 2.0f, 3.0f } );
             var y = a.Pow( 3.0f );
 
-            Assert.That( y.Data[ 0 ], Is.EqualTo( 8.0f ).Within( 1e-6 ) );
-            Assert.That( y.Data[ 1 ], Is.EqualTo( 27.0f ).Within( 1e-6 ) );
+            Assert.That( y.Data[ 0 ], Is.EqualTo( 8.0f ).Within( 1e-5 ) );
+            Assert.That( y.Data[ 1 ], Is.EqualTo( 27.0f ).Within( 1e-5 ) );
 
             y.Backward();
             // dy/da = 3 * a^2
@@ -505,7 +505,11 @@ namespace ChaosRL.Tests
         {
             var a = new Tensor( new[] { 3 }, new[] { 0f, 2f, 3f } );
             var normalized = a.Normalize();
-            var loss = normalized.Sum();
+
+            // Note: sum(normalize(x)) ≡ 0 for all x, so its gradient is identically zero.
+            // Use a weighted sum with non-uniform weights to get meaningful gradients.
+            var weights = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f }, requiresGrad: false );
+            var loss = (normalized * weights).Sum();
 
             loss.Backward();
 

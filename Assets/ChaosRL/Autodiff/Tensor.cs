@@ -2,22 +2,55 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-using Unity.Burst;
 using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
-using Unity.Jobs;
 
 namespace ChaosRL
 {
     /// <summary>
     /// Multi-dimensional tensor with automatic differentiation support.
     /// Data is stored in row-major (C-style) contiguous layout for cache efficiency.
+    /// Storage is managed by <see cref="TensorStorage"/> with ref-counting for view tensors.
+    /// Compute is dispatched through the cached <see cref="Backend"/> resolved at creation.
     /// </summary>
     public class Tensor : IDisposable
     {
         //------------------------------------------------------------------
-        public ref NativeArray<float> Data => ref _data;
-        public ref NativeArray<float> Grad => ref _grad;
+        //  Backend registration
+        //------------------------------------------------------------------
+        private static readonly CpuBackend _cpuBackend = new CpuBackend();
+        private static ITensorBackend _gpuBackend;
+
+        private static ITensorBackend ResolveBackend( TensorDevice device )
+        {
+            switch (device)
+            {
+                case TensorDevice.CPU:
+                    return _cpuBackend;
+
+                case TensorDevice.GPU:
+                    if (_gpuBackend == null)
+                        throw new InvalidOperationException(
+                            "No GPU backend registered. Set Tensor.GpuBackend before using GPU tensors." );
+                    return _gpuBackend;
+
+                default:
+                    throw new ArgumentOutOfRangeException( nameof( device ), device, "Unknown tensor device" );
+            }
+        }
+
+        //------------------------------------------------------------------
+        /// <summary>Underlying ref-counted data storage.</summary>
+        public TensorStorage DataStorage { get; private set; }
+
+        /// <summary>Underlying ref-counted gradient storage.</summary>
+        public TensorStorage GradStorage { get; private set; }
+
+        /// <summary>Convenience accessor — returns the NativeArray for Burst jobs and element access.</summary>
+        public ref NativeArray<float> Data => ref DataStorage.Buffer;
+
+        /// <summary>Convenience accessor — returns the NativeArray for Burst jobs and element access.</summary>
+        public ref NativeArray<float> Grad => ref GradStorage.Buffer;
+
         public int[] Shape { get; private set; }
         public int Size { get; private set; }
         public string Name { get; set; }
@@ -25,19 +58,20 @@ namespace ChaosRL
         public bool IsScalar => Size == 1;
         public bool RequiresGrad { get; set; }
 
-        private NativeArray<float> _data;
-        private NativeArray<float> _grad;
-        // For view tensors, keep a strong reference to the tensor that owns the storage.
-        // This prevents the owning tensor from being GC'd/finalized while views are still alive.
-        private Tensor _storageOwner;
+        /// <summary>Which compute device this tensor resides on.</summary>
+        public TensorDevice Device => DataStorage.Device;
+
+        /// <summary>Cached compute backend for this tensor's device.</summary>
+        public ITensorBackend Backend { get; private set; }
+
         private Action _backward;
         private bool _disposed;
 
         //------------------------------------------------------------------
         public float this[ params int[] indices ]
         {
-            get => Data[ ToFlatIndex( indices ) ];
-            set => Data[ ToFlatIndex( indices ) ] = value;
+            get => DataStorage[ ToFlatIndex( indices ) ];
+            set => DataStorage[ ToFlatIndex( indices ) ] = value;
         }
         //------------------------------------------------------------------
         private void ValidateAndCalculateSize( int[] shape )
@@ -55,56 +89,57 @@ namespace ChaosRL
                 Size *= dim;
         }
         //------------------------------------------------------------------
-        private static Tensor ResolveStorageOwner( Tensor t )
+        private static void ValidateDeviceMatch( Tensor a, Tensor b )
         {
-            if (t == null)
-                throw new ArgumentNullException( nameof( t ) );
-
-            var current = t;
-            while (current._storageOwner != null)
-                current = current._storageOwner;
-
-            return current;
+            if (a.Device != b.Device)
+                throw new InvalidOperationException(
+                    $"Tensor device mismatch: '{a.Name}' on {a.Device}, '{b.Name}' on {b.Device}. Use Tensor.To() to transfer." );
         }
-
         //------------------------------------------------------------------
         // TODO: switch to params int[] for shape to improve usability
-        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true )
+        public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true,
+                       TensorDevice device = TensorDevice.CPU )
         {
             ValidateAndCalculateSize( shape );
 
             if (data != null && data.Length != Size)
                 throw new ArgumentException( $"Data length {data.Length} doesn't match shape size {Size}" );
 
-            _data = new NativeArray<float>( Size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
-            _grad = new NativeArray<float>( Size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
-            _storageOwner = null;
+            DataStorage = TensorStorage.Allocate( Size, device );
+            GradStorage = TensorStorage.Allocate( Size, device );
 
             if (data != null)
-                _data.CopyFrom( data );
+                DataStorage.CopyFrom( data );
 
             Name = name;
             Children = new HashSet<Tensor>();
             RequiresGrad = requiresGrad;
+            Backend = ResolveBackend( device );
             _backward = null;
         }
         //------------------------------------------------------------------
-        private Tensor( int[] shape, Tensor storageOwner, Tensor[] children, string name, bool requiresGrad )
+        /// <summary>
+        /// View constructor — shares the same <see cref="TensorStorage"/> as the owner tensor.
+        /// Increments the ref-count on both data and grad storage.
+        /// </summary>
+        private Tensor( int[] shape, TensorStorage dataStorage, TensorStorage gradStorage,
+                        Tensor[] children, string name, bool requiresGrad )
         {
             ValidateAndCalculateSize( shape );
 
-            var owner = ResolveStorageOwner( storageOwner );
-            if (owner._disposed)
-                throw new ObjectDisposedException( nameof( Tensor ), "Storage owner tensor is disposed" );
-
-            if (!owner._data.IsCreated || !owner._grad.IsCreated)
-                throw new ArgumentException( "Data/Grad must be created for view tensors" );
-            if (owner._data.Length != Size || owner._grad.Length != Size)
+            if (dataStorage == null || gradStorage == null)
+                throw new ArgumentNullException( "Storage must not be null for view tensors" );
+            if (!dataStorage.IsCreated || !gradStorage.IsCreated)
+                throw new ArgumentException( "Storage must be created for view tensors" );
+            if (dataStorage.Length != Size || gradStorage.Length != Size)
                 throw new ArgumentException( $"View tensor storage length must match shape size {Size}" );
 
-            _data = owner._data;
-            _grad = owner._grad;
-            _storageOwner = owner;
+            dataStorage.AddRef();
+            gradStorage.AddRef();
+
+            DataStorage = dataStorage;
+            GradStorage = gradStorage;
+            Backend = ResolveBackend( dataStorage.Device );
             Name = name;
             Children = new HashSet<Tensor>();
             if (children != null)
@@ -114,7 +149,8 @@ namespace ChaosRL
             _backward = null;
         }
         //------------------------------------------------------------------
-        public Tensor( int[] shape, Tensor[] children, string name = "" ) : this( shape, (float[])null, name )
+        public Tensor( int[] shape, Tensor[] children, string name = "",
+                       TensorDevice device = TensorDevice.CPU ) : this( shape, (float[])null, name, device: device )
         {
             if (children != null)
                 foreach (var child in children)
@@ -126,9 +162,6 @@ namespace ChaosRL
         {
         }
         //------------------------------------------------------------------
-        // TODO: move to ArenaPool and TensorStorage pattern
-        // Relying on finalizer to catch undisposed tensors is bad practice
-        // Finalizers are non-deterministic and can lead to memory leaks
         ~Tensor()
         {
             Dispose( false );
@@ -147,19 +180,13 @@ namespace ChaosRL
 
             _disposed = true;
 
-            // Only the owning tensor is responsible for disposing the shared storage.
-            // Views keep a strong reference to the owner via _storageOwner.
-            if (_storageOwner == null)
-            {
-                if (_grad.IsCreated)
-                    _grad.Dispose();
-                if (_data.IsCreated)
-                    _data.Dispose();
-            }
+            // Ref-counted: Release decrements and disposes the backing buffer when count reaches zero.
+            // View tensors called AddRef at creation, so this is always safe.
+            GradStorage?.Release();
+            DataStorage?.Release();
 
-            _grad = default;
-            _data = default;
-            _storageOwner = null;
+            GradStorage = null;
+            DataStorage = null;
         }
         //------------------------------------------------------------------
         public static implicit operator Tensor( float f )
@@ -170,6 +197,8 @@ namespace ChaosRL
         // Element-wise addition
         public static Tensor operator +( Tensor a, Tensor b )
         {
+            ValidateDeviceMatch( a, b );
+
             if (CanBroadcastModulo( a, b ) == false)
                 throw new ArgumentException(
                     $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for addition" );
@@ -179,9 +208,8 @@ namespace ChaosRL
             int resultSize = Math.Max( sizeA, sizeB );
             var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( resultShape, new[] { a, b }, "+" );
-            for (int i = 0; i < resultSize; i++)
-                result.Data[ i ] = a.Data[ i % sizeA ] + b.Data[ i % sizeB ];
+            var result = new Tensor( resultShape, new[] { a, b }, "+", device: a.Device );
+            a.Backend.Add( a.DataStorage, b.DataStorage, result.DataStorage, sizeA, sizeB, resultSize );
 
             result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -192,11 +220,7 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < resultSize; i++)
-                {
-                    a.Grad[ i % sizeA ] += result.Grad[ i ] * aGradScale;
-                    b.Grad[ i % sizeB ] += result.Grad[ i ] * bGradScale;
-                }
+                a.Backend.AddBackward( a.GradStorage, b.GradStorage, result.GradStorage, sizeA, sizeB, resultSize, aGradScale, bGradScale );
             };
             return result;
         }
@@ -204,6 +228,8 @@ namespace ChaosRL
         // Element-wise multiplication
         public static Tensor operator *( Tensor a, Tensor b )
         {
+            ValidateDeviceMatch( a, b );
+
             if (CanBroadcastModulo( a, b ) == false)
                 throw new ArgumentException(
                     $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for multiplication" );
@@ -213,9 +239,8 @@ namespace ChaosRL
             int resultSize = Math.Max( sizeA, sizeB );
             var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( resultShape, new[] { a, b }, "*" );
-            for (int i = 0; i < resultSize; i++)
-                result.Data[ i ] = a.Data[ i % sizeA ] * b.Data[ i % sizeB ];
+            var result = new Tensor( resultShape, new[] { a, b }, "*", device: a.Device );
+            a.Backend.Mul( a.DataStorage, b.DataStorage, result.DataStorage, sizeA, sizeB, resultSize );
 
             result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -226,11 +251,7 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < resultSize; i++)
-                {
-                    a.Grad[ i % sizeA ] += b.Data[ i % sizeB ] * result.Grad[ i ] * aGradScale;
-                    b.Grad[ i % sizeB ] += a.Data[ i % sizeA ] * result.Grad[ i ] * bGradScale;
-                }
+                a.Backend.MulBackward( a.DataStorage, b.DataStorage, a.GradStorage, b.GradStorage, result.GradStorage, sizeA, sizeB, resultSize, aGradScale, bGradScale );
             };
             return result;
         }
@@ -247,6 +268,8 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public static Tensor operator /( Tensor a, Tensor b )
         {
+            ValidateDeviceMatch( a, b );
+
             if (CanBroadcastModulo( a, b ) == false)
                 throw new ArgumentException(
                     $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for division" );
@@ -256,9 +279,8 @@ namespace ChaosRL
             int resultSize = Math.Max( sizeA, sizeB );
             var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( resultShape, new[] { a, b }, "/" );
-            for (int i = 0; i < resultSize; i++)
-                result.Data[ i ] = a.Data[ i % sizeA ] / b.Data[ i % sizeB ];
+            var result = new Tensor( resultShape, new[] { a, b }, "/", device: a.Device );
+            a.Backend.Div( a.DataStorage, b.DataStorage, result.DataStorage, sizeA, sizeB, resultSize );
 
             result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -269,22 +291,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < resultSize; i++)
-                {
-                    int idxA = i % sizeA;
-                    int idxB = i % sizeB;
-                    a.Grad[ idxA ] += (1f / b.Data[ idxB ]) * result.Grad[ i ] * aGradScale;
-                    b.Grad[ idxB ] += (-a.Data[ idxA ] / (b.Data[ idxB ] * b.Data[ idxB ])) * result.Grad[ i ] * bGradScale;
-                }
+                a.Backend.DivBackward( a.DataStorage, b.DataStorage, a.GradStorage, b.GradStorage, result.GradStorage, sizeA, sizeB, resultSize, aGradScale, bGradScale );
             };
             return result;
         }
         //------------------------------------------------------------------
         public Tensor Pow( float exponent )
         {
-            var result = new Tensor( Shape, new[] { this }, $"^{exponent}" );
-            for (int i = 0; i < Size; i++)
-                result.Data[ i ] = MathF.Pow( Data[ i ], exponent );
+            var result = new Tensor( Shape, new[] { this }, $"^{exponent}", device: Device );
+            Backend.Pow( DataStorage, result.DataStorage, Size, exponent );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -292,8 +307,7 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += exponent * MathF.Pow( Data[ i ], exponent - 1 ) * result.Grad[ i ];
+                Backend.PowBackward( DataStorage, GradStorage, result.GradStorage, Size, exponent );
             };
             return result;
         }
@@ -305,9 +319,8 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public Tensor Exp()
         {
-            var result = new Tensor( Shape, new[] { this }, "exp" );
-            for (int i = 0; i < Size; i++)
-                result.Data[ i ] = MathF.Exp( Data[ i ] );
+            var result = new Tensor( Shape, new[] { this }, "exp", device: Device );
+            Backend.Exp( DataStorage, result.DataStorage, Size );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -315,17 +328,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += result.Data[ i ] * result.Grad[ i ];
+                Backend.ExpBackward( result.DataStorage, GradStorage, result.GradStorage, Size );
             };
             return result;
         }
         //------------------------------------------------------------------
         public Tensor Log()
         {
-            var result = new Tensor( Shape, new[] { this }, "log" );
-            for (int i = 0; i < Size; i++)
-                result.Data[ i ] = MathF.Log( Data[ i ] );
+            var result = new Tensor( Shape, new[] { this }, "log", device: Device );
+            Backend.Log( DataStorage, result.DataStorage, Size );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -333,17 +344,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += (1f / Data[ i ]) * result.Grad[ i ];
+                Backend.LogBackward( DataStorage, GradStorage, result.GradStorage, Size );
             };
             return result;
         }
         //------------------------------------------------------------------
         public Tensor ReLU()
         {
-            var result = new Tensor( Shape, new[] { this }, "ReLU" );
-            for (int i = 0; i < Size; i++)
-                result.Data[ i ] = Data[ i ] > 0 ? Data[ i ] : 0;
+            var result = new Tensor( Shape, new[] { this }, "ReLU", device: Device );
+            Backend.ReLU( DataStorage, result.DataStorage, Size );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -351,17 +360,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += (Data[ i ] > 0 ? 1f : 0f) * result.Grad[ i ];
+                Backend.ReLUBackward( DataStorage, GradStorage, result.GradStorage, Size );
             };
             return result;
         }
         //------------------------------------------------------------------
         public Tensor Tanh()
         {
-            var result = new Tensor( Shape, new[] { this }, "tanh" );
-            for (int i = 0; i < Size; i++)
-                result.Data[ i ] = MathF.Tanh( Data[ i ] );
+            var result = new Tensor( Shape, new[] { this }, "tanh", device: Device );
+            Backend.Tanh( DataStorage, result.DataStorage, Size );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -369,17 +376,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                    Grad[ i ] += (1f - result.Data[ i ] * result.Data[ i ]) * result.Grad[ i ];
+                Backend.TanhBackward( result.DataStorage, GradStorage, result.GradStorage, Size );
             };
             return result;
         }
         //------------------------------------------------------------------
         public Tensor Clamp( float min, float max )
         {
-            var result = new Tensor( Shape, new[] { this }, "clamp" );
-            for (int i = 0; i < Size; i++)
-                result.Data[ i ] = Math.Max( min, Math.Min( max, Data[ i ] ) );
+            var result = new Tensor( Shape, new[] { this }, "clamp", device: Device );
+            Backend.Clamp( DataStorage, result.DataStorage, Size, min, max );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -387,15 +392,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                    if (Data[ i ] >= min && Data[ i ] <= max)
-                        Grad[ i ] += result.Grad[ i ];
+                Backend.ClampBackward( DataStorage, GradStorage, result.GradStorage, Size, min, max );
             };
             return result;
         }
         //------------------------------------------------------------------
         public static Tensor Max( Tensor a, Tensor b )
         {
+            ValidateDeviceMatch( a, b );
+
             if (CanBroadcastModulo( a, b ) == false)
                 throw new ArgumentException(
                     $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for max" );
@@ -405,9 +410,8 @@ namespace ChaosRL
             int resultSize = Math.Max( sizeA, sizeB );
             var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( resultShape, new[] { a, b }, "max" );
-            for (int i = 0; i < resultSize; i++)
-                result.Data[ i ] = Math.Max( a.Data[ i % sizeA ], b.Data[ i % sizeB ] );
+            var result = new Tensor( resultShape, new[] { a, b }, "max", device: a.Device );
+            a.Backend.ElementMax( a.DataStorage, b.DataStorage, result.DataStorage, sizeA, sizeB, resultSize );
 
             result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -418,20 +422,15 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < resultSize; i++)
-                {
-                    int idxA = i % sizeA;
-                    int idxB = i % sizeB;
-                    float isAMax = a.Data[ idxA ] >= b.Data[ idxB ] ? 1f : 0f;
-                    a.Grad[ idxA ] += result.Grad[ i ] * isAMax * aGradScale;
-                    b.Grad[ idxB ] += result.Grad[ i ] * (1f - isAMax) * bGradScale;
-                }
+                a.Backend.ElementMaxBackward( a.DataStorage, b.DataStorage, a.GradStorage, b.GradStorage, result.GradStorage, sizeA, sizeB, resultSize, aGradScale, bGradScale );
             };
             return result;
         }
         //------------------------------------------------------------------
         public static Tensor Min( Tensor a, Tensor b )
         {
+            ValidateDeviceMatch( a, b );
+
             if (CanBroadcastModulo( a, b ) == false)
                 throw new ArgumentException(
                     $"Cannot broadcast shapes [{string.Join( ",", a.Shape )}] and [{string.Join( ",", b.Shape )}] for min" );
@@ -441,9 +440,8 @@ namespace ChaosRL
             int resultSize = Math.Max( sizeA, sizeB );
             var resultShape = resultSize == sizeA ? a.Shape : b.Shape;
 
-            var result = new Tensor( resultShape, new[] { a, b }, "min" );
-            for (int i = 0; i < resultSize; i++)
-                result.Data[ i ] = Math.Min( a.Data[ i % sizeA ], b.Data[ i % sizeB ] );
+            var result = new Tensor( resultShape, new[] { a, b }, "min", device: a.Device );
+            a.Backend.ElementMin( a.DataStorage, b.DataStorage, result.DataStorage, sizeA, sizeB, resultSize );
 
             result.RequiresGrad = a.RequiresGrad || b.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -454,14 +452,7 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                for (int i = 0; i < resultSize; i++)
-                {
-                    int idxA = i % sizeA;
-                    int idxB = i % sizeB;
-                    float isAMin = a.Data[ idxA ] <= b.Data[ idxB ] ? 1f : 0f;
-                    a.Grad[ idxA ] += result.Grad[ i ] * isAMin * aGradScale;
-                    b.Grad[ idxB ] += result.Grad[ i ] * (1f - isAMin) * bGradScale;
-                }
+                a.Backend.ElementMinBackward( a.DataStorage, b.DataStorage, a.GradStorage, b.GradStorage, result.GradStorage, sizeA, sizeB, resultSize, aGradScale, bGradScale );
             };
             return result;
         }
@@ -473,6 +464,8 @@ namespace ChaosRL
         /// </summary>
         public Tensor MatMul( Tensor other )
         {
+            ValidateDeviceMatch( this, other );
+
             if (Shape.Length != 2 || other.Shape.Length != 2)
                 throw new ArgumentException( "MatMul requires 2D tensors" );
 
@@ -483,12 +476,10 @@ namespace ChaosRL
             if (other.Shape[ 0 ] != K)
                 throw new ArgumentException( $"Inner dimensions must match: ({M}x{K}) @ ({other.Shape[ 0 ]}x{N})" );
 
-            var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul" );
+            var result = new Tensor( new[] { M, N }, new[] { this, other }, "matmul", device: Device );
 
             // Forward: C = A @ B
-            TensorOps.ScheduleMatMul(
-                Data, other.Data, result.Data,
-                M, K, N, accumulate: false ).Complete();
+            Backend.MatMul( DataStorage, other.DataStorage, result.DataStorage, M, K, N, accumulate: false );
 
             result.RequiresGrad = this.RequiresGrad || other.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -497,31 +488,12 @@ namespace ChaosRL
             // Backward: dA = dC @ B^T, dB = A^T @ dC
             result._backward = () =>
             {
-                JobHandle dAHandle = default, dBHandle = default;
-                NativeArray<float> tempBT = default, tempAT = default;
-
-                if (this.RequiresGrad)
-                {
-                    tempBT = new NativeArray<float>( other.Size, Allocator.TempJob );
-                    var tBH = TensorOps.ScheduleTranspose( other.Data, tempBT, K, N );
-                    dAHandle = TensorOps.ScheduleMatMul(
-                        result.Grad, tempBT, Grad,
-                        M, N, K, accumulate: true, dependsOn: tBH );
-                }
-
-                if (other.RequiresGrad)
-                {
-                    tempAT = new NativeArray<float>( Size, Allocator.TempJob );
-                    var tAH = TensorOps.ScheduleTranspose( Data, tempAT, M, K );
-                    dBHandle = TensorOps.ScheduleMatMul(
-                        tempAT, result.Grad, other.Grad,
-                        K, M, N, accumulate: true, dependsOn: tAH );
-                }
-
-                JobHandle.CombineDependencies( dAHandle, dBHandle ).Complete();
-
-                if (tempBT.IsCreated) tempBT.Dispose();
-                if (tempAT.IsCreated) tempAT.Dispose();
+                Backend.MatMulBackward(
+                    DataStorage, other.DataStorage,
+                    GradStorage, other.GradStorage,
+                    result.GradStorage,
+                    M, K, N,
+                    this.RequiresGrad, other.RequiresGrad );
             };
 
             return result;
@@ -532,10 +504,8 @@ namespace ChaosRL
         /// </summary>
         public Tensor Sum()
         {
-            var result = new Tensor( new[] { 1 }, new[] { this }, "sum" );
-
-            // Burst-compiled reduction — avoids per-element NativeArray safety checks in Editor.
-            new SumReductionJob { Input = Data, Output = result.Data }.Run();
+            var result = new Tensor( new[] { 1 }, new[] { this }, "sum", device: Device );
+            Backend.Sum( DataStorage, result.DataStorage, Size );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -543,13 +513,7 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                // Burst-compiled scalar broadcast — avoids 2N managed array accesses.
-                float gradVal = result.Grad[ 0 ];
-                new AddScalarParallelJob
-                {
-                    Target = Grad,
-                    Value = gradVal
-                }.Schedule( Size, TensorOps.GetBatchSize( Size ) ).Complete();
+                Backend.SumBackward( GradStorage, result.GradStorage, Size );
             };
 
             return result;
@@ -579,7 +543,7 @@ namespace ChaosRL
             if (outShape.Length == 0)
                 return Sum(); // your existing full sum
 
-            var result = new Tensor( outShape, new[] { this }, $"sum(dim={dim})" );
+            var result = new Tensor( outShape, new[] { this }, $"sum(dim={dim})", device: Device );
 
             int dimSize = Shape[ dim ];
 
@@ -594,22 +558,8 @@ namespace ChaosRL
             // how many such blocks we have (product of sizes before "dim")
             int outerSize = Size / blockSize;
 
-            // Forward: for each (outer, inner) sum over dim
-            for (int outer = 0; outer < outerSize; outer++)
-            {
-                int baseBlock = outer * blockSize;
-
-                for (int inner = 0; inner < innerSize; inner++)
-                {
-                    int baseIdx = baseBlock + inner;
-                    float sum = 0f;
-
-                    for (int d = 0; d < dimSize; d++)
-                        sum += Data[ baseIdx + d * innerSize ];
-
-                    result.Data[ outer * innerSize + inner ] = sum;
-                }
-            }
+            // Forward: sum along dim via backend
+            Backend.SumDim( DataStorage, result.DataStorage, outerSize, dimSize, innerSize );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -618,19 +568,7 @@ namespace ChaosRL
             // Backward: broadcast grad back over reduced dim
             result._backward = () =>
             {
-                for (int outer = 0; outer < outerSize; outer++)
-                {
-                    int baseBlock = outer * blockSize;
-
-                    for (int inner = 0; inner < innerSize; inner++)
-                    {
-                        int baseIdx = baseBlock + inner;
-                        float g = result.Grad[ outer * innerSize + inner ];
-
-                        for (int d = 0; d < dimSize; d++)
-                            Grad[ baseIdx + d * innerSize ] += g;
-                    }
-                }
+                Backend.SumDimBackward( GradStorage, result.GradStorage, outerSize, dimSize, innerSize );
             };
 
             return result;
@@ -724,19 +662,8 @@ namespace ChaosRL
         /// </summary>
         public Tensor Max()
         {
-            var result = new Tensor( new[] { 1 }, new[] { this }, "max" );
-
-            float maxVal = float.MinValue;
-            int maxIdx = 0;
-            for (int i = 0; i < Size; i++)
-            {
-                if (Data[ i ] > maxVal)
-                {
-                    maxVal = Data[ i ];
-                    maxIdx = i;
-                }
-            }
-            result.Data[ 0 ] = maxVal;
+            var result = new Tensor( new[] { 1 }, new[] { this }, "max", device: Device );
+            Backend.MaxReduce( DataStorage, result.DataStorage, Size, out int maxIdx );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -775,7 +702,7 @@ namespace ChaosRL
             if (outShape.Length == 0)
                 return Max();
 
-            var result = new Tensor( outShape, new[] { this }, $"max(dim={dim})" );
+            var result = new Tensor( outShape, new[] { this }, $"max(dim={dim})", device: Device );
 
             // Calculate strides
             int dimSize = Shape[ dim ];
@@ -857,7 +784,7 @@ namespace ChaosRL
                 newShape[ i + 1 ] = Shape[ i ];
 
             // Create view tensor sharing data/grad (no allocation)
-            return new Tensor( newShape, this, new[] { this }, $"unsqueeze({dim})", RequiresGrad );
+            return new Tensor( newShape, DataStorage, GradStorage, new[] { this }, $"unsqueeze({dim})", RequiresGrad );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -896,7 +823,7 @@ namespace ChaosRL
                     newShape = new[] { 1 }; // Keep as scalar [1]
 
                 // Create view tensor sharing data/grad (no allocation)
-                return new Tensor( newShape, this, new[] { this }, $"squeeze({d})", RequiresGrad );
+                return new Tensor( newShape, DataStorage, GradStorage, new[] { this }, $"squeeze({d})", RequiresGrad );
             }
             else
             {
@@ -913,7 +840,7 @@ namespace ChaosRL
                 var newShape = newShapeList.ToArray();
 
                 // Create view tensor sharing data/grad (no allocation)
-                return new Tensor( newShape, this, new[] { this }, "squeeze()", RequiresGrad );
+                return new Tensor( newShape, DataStorage, GradStorage, new[] { this }, "squeeze()", RequiresGrad );
             }
         }
         //------------------------------------------------------------------
@@ -947,7 +874,7 @@ namespace ChaosRL
             var resultShape = (int[])Shape.Clone();
             resultShape[ dim ] = length;
 
-            var result = new Tensor( resultShape, new[] { this }, $"slice(dim={dim},start={start})" );
+            var result = new Tensor( resultShape, new[] { this }, $"slice(dim={dim},start={start})", device: Device );
 
             // Calculate strides
             int innerSize = 1;
@@ -958,15 +885,8 @@ namespace ChaosRL
             int outerSize = Size / blockSize;
             int sliceBlockSize = length * innerSize;
 
-            // Forward: copy sliced elements
-            for (int outer = 0; outer < outerSize; outer++)
-            {
-                int srcBase = outer * blockSize + start * innerSize;
-                int dstBase = outer * sliceBlockSize;
-
-                for (int i = 0; i < sliceBlockSize; i++)
-                    result.Data[ dstBase + i ] = Data[ srcBase + i ];
-            }
+            // Forward: copy sliced elements via backend
+            Backend.SliceCopy( DataStorage, result.DataStorage, outerSize, blockSize, sliceBlockSize, start * innerSize, sliceBlockSize );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -975,14 +895,7 @@ namespace ChaosRL
             // Backward: accumulate gradients back to source positions
             result._backward = () =>
             {
-                for (int outer = 0; outer < outerSize; outer++)
-                {
-                    int srcBase = outer * blockSize + start * innerSize;
-                    int dstBase = outer * sliceBlockSize;
-
-                    for (int i = 0; i < sliceBlockSize; i++)
-                        Grad[ srcBase + i ] += result.Grad[ dstBase + i ];
-                }
+                Backend.SliceCopyBackward( GradStorage, result.GradStorage, outerSize, blockSize, sliceBlockSize, start * innerSize, sliceBlockSize );
             };
 
             return result;
@@ -1005,16 +918,10 @@ namespace ChaosRL
                 newShape[ i ] = Shape[ i ];
             newShape[ Shape.Length ] = num;
 
-            var result = new Tensor( newShape, new[] { this }, $"expandLast({num})" );
+            var result = new Tensor( newShape, new[] { this }, $"expandLast({num})", device: Device );
 
-            // Forward pass: replicate each element num times
-            for (int i = 0; i < Size; i++)
-            {
-                for (int j = 0; j < num; j++)
-                {
-                    result.Data[ i * num + j ] = Data[ i ];
-                }
-            }
+            // Forward pass: replicate each element num times via backend
+            Backend.ExpandLast( DataStorage, result.DataStorage, Size, num );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -1023,13 +930,7 @@ namespace ChaosRL
             // Backward pass: accumulate gradients from all replications
             result._backward = () =>
             {
-                for (int i = 0; i < Size; i++)
-                {
-                    for (int j = 0; j < num; j++)
-                    {
-                        Grad[ i ] += result.Grad[ i * num + j ];
-                    }
-                }
+                Backend.ExpandLastBackward( GradStorage, result.GradStorage, Size, num );
             };
 
             return result;
@@ -1061,7 +962,7 @@ namespace ChaosRL
                     $"Total size must remain the same. Current size: {Size}, new size: {newSize}" );
 
             // Create view tensor sharing data/grad (no allocation)
-            return new Tensor( newShape, this, new[] { this }, $"reshape({string.Join( ",", newShape )})", RequiresGrad );
+            return new Tensor( newShape, DataStorage, GradStorage, new[] { this }, $"reshape({string.Join( ",", newShape )})", RequiresGrad );
         }
         //------------------------------------------------------------------
         private static bool CanBroadcastModulo( Tensor a, Tensor b )
@@ -1147,25 +1048,16 @@ namespace ChaosRL
 
             BuildTopo( this );
 
-            // Burst-safe fill: write 1.0f to all grad elements without managed indexing.
-            unsafe
-            {
-                float one = 1f;
-                UnsafeUtility.MemCpyReplicate(
-                    NativeArrayUnsafeUtility.GetUnsafePtr( Grad ),
-                    &one, sizeof( float ), Grad.Length );
-            }
+            Backend.FillOnes( GradStorage, GradStorage.Length );
 
             topo.Reverse();
             foreach (var t in topo)
                 t._backward?.Invoke();
         }
         //------------------------------------------------------------------
-        public unsafe void ZeroGrad()
+        public void ZeroGrad()
         {
-            UnsafeUtility.MemClear(
-                NativeArrayUnsafeUtility.GetUnsafePtr( Grad ),
-                Grad.Length * sizeof( float ) );
+            GradStorage.Clear();
         }
         //------------------------------------------------------------------
         public override string ToString()
@@ -1186,6 +1078,35 @@ namespace ChaosRL
             sb.Append( "]" );
             return sb.ToString();
         }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Creates a copy of this tensor on the specified device.
+        /// If already on the target device, returns the same tensor (no copy).
+        /// </summary>
+        public Tensor To( TensorDevice targetDevice )
+        {
+            if (Device == targetDevice)
+                return this;
+
+            var result = new Tensor( (int[])Shape.Clone(), device: targetDevice, name: Name, requiresGrad: RequiresGrad );
+
+            // Copy data from source storage to destination via CPU-accessible readback
+            var tempData = new float[ Size ];
+            DataStorage.CopyTo( tempData );
+            result.DataStorage.CopyFrom( tempData );
+
+            var tempGrad = new float[ Size ];
+            GradStorage.CopyTo( tempGrad );
+            result.GradStorage.CopyFrom( tempGrad );
+
+            return result;
+        }
+        //------------------------------------------------------------------
+        /// <summary>Convenience for <see cref="To"/>(<see cref="TensorDevice.CPU"/>).</summary>
+        public Tensor ToCpu() => To( TensorDevice.CPU );
+
+        /// <summary>Convenience for <see cref="To"/>(<see cref="TensorDevice.GPU"/>).</summary>
+        public Tensor ToGpu() => To( TensorDevice.GPU );
         //------------------------------------------------------------------
     }
 }
