@@ -352,5 +352,588 @@ namespace ChaosRL
             Target[ index ] += Value;
         }
     }
+
+    //==================================================================
+    //  Element-wise binary ops — forward
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>result[i] = A[i % sizeA] + B[i % sizeB]</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementAddJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> A;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> B;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public int SizeA, SizeB;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = A[ i % SizeA ] + B[ i % SizeB ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = A[i % sizeA] * B[i % sizeB]</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementMulJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> A;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> B;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public int SizeA, SizeB;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = A[ i % SizeA ] * B[ i % SizeB ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = A[i % sizeA] / B[i % sizeB]</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementDivJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> A;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> B;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public int SizeA, SizeB;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = A[ i % SizeA ] / B[ i % SizeB ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = max( A[i % sizeA], B[i % sizeB] )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementMaxJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> A;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> B;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public int SizeA, SizeB;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.max( A[ i % SizeA ], B[ i % SizeB ] );
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = min( A[i % sizeA], B[i % sizeB] )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementMinJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> A;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> B;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public int SizeA, SizeB;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.min( A[ i % SizeA ], B[ i % SizeB ] );
+        }
+    }
+
+    //==================================================================
+    //  Element-wise binary ops — backward
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>Backward for Add: aGrad[i%sizeA] += resultGrad[i]*aScale, bGrad[i%sizeB] += resultGrad[i]*bScale</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct AddBackwardJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction] public NativeArray<float> AGrad;
+        [NativeDisableParallelForRestriction] public NativeArray<float> BGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public int SizeA, SizeB;
+        public float AGradScale, BGradScale;
+
+        public void Execute( int i )
+        {
+            float g = ResultGrad[ i ];
+            AGrad[ i % SizeA ] += g * AGradScale;
+            BGrad[ i % SizeB ] += g * BGradScale;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for Mul: aGrad += bData * resultGrad * scale, bGrad += aData * resultGrad * scale</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct MulBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> AData;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> BData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> AGrad;
+        [NativeDisableParallelForRestriction] public NativeArray<float> BGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public int SizeA, SizeB;
+        public float AGradScale, BGradScale;
+
+        public void Execute( int i )
+        {
+            float g = ResultGrad[ i ];
+            AGrad[ i % SizeA ] += BData[ i % SizeB ] * g * AGradScale;
+            BGrad[ i % SizeB ] += AData[ i % SizeA ] * g * BGradScale;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for Div: da = (1/b)*dout*scale, db = (-a/b^2)*dout*scale</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct DivBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> AData;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> BData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> AGrad;
+        [NativeDisableParallelForRestriction] public NativeArray<float> BGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public int SizeA, SizeB;
+        public float AGradScale, BGradScale;
+
+        public void Execute( int i )
+        {
+            int idxA = i % SizeA;
+            int idxB = i % SizeB;
+            float g = ResultGrad[ i ];
+            float bVal = BData[ idxB ];
+            AGrad[ idxA ] += (1f / bVal) * g * AGradScale;
+            BGrad[ idxB ] += (-AData[ idxA ] / (bVal * bVal)) * g * BGradScale;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for ElementMax: gradient flows to whichever operand was larger.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementMaxBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> AData;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> BData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> AGrad;
+        [NativeDisableParallelForRestriction] public NativeArray<float> BGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public int SizeA, SizeB;
+        public float AGradScale, BGradScale;
+
+        public void Execute( int i )
+        {
+            int idxA = i % SizeA;
+            int idxB = i % SizeB;
+            float g = ResultGrad[ i ];
+            float isAMax = AData[ idxA ] >= BData[ idxB ] ? 1f : 0f;
+            AGrad[ idxA ] += g * isAMax * AGradScale;
+            BGrad[ idxB ] += g * (1f - isAMax) * BGradScale;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for ElementMin: gradient flows to whichever operand was smaller.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementMinBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> AData;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> BData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> AGrad;
+        [NativeDisableParallelForRestriction] public NativeArray<float> BGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public int SizeA, SizeB;
+        public float AGradScale, BGradScale;
+
+        public void Execute( int i )
+        {
+            int idxA = i % SizeA;
+            int idxB = i % SizeB;
+            float g = ResultGrad[ i ];
+            float isAMin = AData[ idxA ] <= BData[ idxB ] ? 1f : 0f;
+            AGrad[ idxA ] += g * isAMin * AGradScale;
+            BGrad[ idxB ] += g * (1f - isAMin) * BGradScale;
+        }
+    }
+
+    //==================================================================
+    //  Element-wise unary ops — forward
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>result[i] = pow( input[i], exponent )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementPowJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public float Exponent;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.pow( Input[ i ], Exponent );
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = exp( input[i] )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementExpJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.exp( Input[ i ] );
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = log( input[i] )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementLogJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.log( Input[ i ] );
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = max( 0, input[i] )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementReLUJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.max( 0f, Input[ i ] );
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = tanh( input[i] )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementTanhJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.tanh( Input[ i ] );
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>result[i] = clamp( input[i], min, max )</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ElementClampJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Result;
+        public float Min, Max;
+
+        public void Execute( int i )
+        {
+            Result[ i ] = math.clamp( Input[ i ], Min, Max );
+        }
+    }
+
+    //==================================================================
+    //  Element-wise unary ops — backward
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>Backward for Pow: grad += exponent * pow(data, exponent-1) * resultGrad</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct PowBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> InputData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public float Exponent;
+
+        public void Execute( int i )
+        {
+            InputGrad[ i ] += Exponent * math.pow( InputData[ i ], Exponent - 1f ) * ResultGrad[ i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for Exp: grad += resultData * resultGrad</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ExpBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+
+        public void Execute( int i )
+        {
+            InputGrad[ i ] += ResultData[ i ] * ResultGrad[ i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for Log: grad += (1/inputData) * resultGrad</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct LogBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> InputData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+
+        public void Execute( int i )
+        {
+            InputGrad[ i ] += (1f / InputData[ i ]) * ResultGrad[ i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for ReLU: grad += (data > 0 ? 1 : 0) * resultGrad</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ReLUBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> InputData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+
+        public void Execute( int i )
+        {
+            InputGrad[ i ] += (InputData[ i ] > 0f ? 1f : 0f) * ResultGrad[ i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for Tanh: grad += (1 - resultData^2) * resultGrad</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct TanhBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+
+        public void Execute( int i )
+        {
+            float t = ResultData[ i ];
+            InputGrad[ i ] += (1f - t * t) * ResultGrad[ i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for Clamp: grad += resultGrad where data is within [min, max]</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ClampBackwardJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> InputData;
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> ResultGrad;
+        public float Min, Max;
+
+        public void Execute( int i )
+        {
+            float d = InputData[ i ];
+            if (d >= Min && d <= Max)
+                InputGrad[ i ] += ResultGrad[ i ];
+        }
+    }
+
+    //==================================================================
+    //  Dimensional reduction ops
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>
+    /// Sum along a dimension. Parallelized over (outer * inner) output elements.
+    /// For shape [outer, dim, inner]: output[outer, inner] = sum_d input[outer, d, inner].
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct SumDimJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Output;
+        public int DimSize, InnerSize;
+
+        public void Execute( int outIdx )
+        {
+            int outer = outIdx / InnerSize;
+            int inner = outIdx - outer * InnerSize;
+            int blockSize = DimSize * InnerSize;
+            int baseIdx = outer * blockSize + inner;
+
+            float sum = 0f;
+            for (int d = 0; d < DimSize; d++)
+                sum += Input[ baseIdx + d * InnerSize ];
+
+            Output[ outIdx ] = sum;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Backward for SumDim: broadcast gradient back over the reduced dimension.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct SumDimBackwardJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> OutputGrad;
+        public int DimSize, InnerSize;
+
+        public void Execute( int outIdx )
+        {
+            int outer = outIdx / InnerSize;
+            int inner = outIdx - outer * InnerSize;
+            int blockSize = DimSize * InnerSize;
+            int baseIdx = outer * blockSize + inner;
+
+            float g = OutputGrad[ outIdx ];
+            for (int d = 0; d < DimSize; d++)
+                InputGrad[ baseIdx + d * InnerSize ] += g;
+        }
+    }
+
+    //==================================================================
+    //  Data movement ops
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>Slice forward: copies strided blocks from source to destination.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct SliceCopyJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Src;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Dst;
+        public int SrcBlockSize, DstBlockSize, StartOffset, InnerSize;
+
+        public void Execute( int outer )
+        {
+            int srcBase = outer * SrcBlockSize + StartOffset;
+            int dstBase = outer * DstBlockSize;
+
+            for (int i = 0; i < DstBlockSize; i++)
+                Dst[ dstBase + i ] = Src[ srcBase + i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>Slice backward: accumulates gradient back to source positions.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct SliceCopyBackwardJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction] public NativeArray<float> SrcGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> DstGrad;
+        public int SrcBlockSize, DstBlockSize, StartOffset, InnerSize;
+
+        public void Execute( int outer )
+        {
+            int srcBase = outer * SrcBlockSize + StartOffset;
+            int dstBase = outer * DstBlockSize;
+
+            for (int i = 0; i < DstBlockSize; i++)
+                SrcGrad[ srcBase + i ] += DstGrad[ dstBase + i ];
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>ExpandLast forward: replicate each element num times.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ExpandLastJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Input;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Output;
+        public int Num;
+
+        public void Execute( int i )
+        {
+            float val = Input[ i ];
+            int baseOut = i * Num;
+            for (int j = 0; j < Num; j++)
+                Output[ baseOut + j ] = val;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>ExpandLast backward: accumulate gradients from replicated elements.</summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct ExpandLastBackwardJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction] public NativeArray<float> InputGrad;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> OutputGrad;
+        public int Num;
+
+        public void Execute( int i )
+        {
+            float sum = 0f;
+            int baseOut = i * Num;
+            for (int j = 0; j < Num; j++)
+                sum += OutputGrad[ baseOut + j ];
+            InputGrad[ i ] += sum;
+        }
+    }
+    //------------------------------------------------------------------
+    /// <summary>
+    /// Contiguous copy between NativeArrays at specified offsets.
+    /// Parallelized per element.
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct CopyJob : IJobParallelFor
+    {
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Src;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<float> Dst;
+        public int SrcOffset, DstOffset;
+
+        public void Execute( int i )
+        {
+            Dst[ DstOffset + i ] = Src[ SrcOffset + i ];
+        }
+    }
+
+    //==================================================================
+    //  Optimizer
+    //==================================================================
+
+    //------------------------------------------------------------------
+    /// <summary>
+    /// Adam optimizer step. Updates parameter data in-place, reads gradient,
+    /// and updates first/second moment buffers.
+    /// </summary>
+    [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
+                   DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
+    public struct AdamStepJob : IJobParallelFor
+    {
+        [NativeDisableParallelForRestriction] public NativeArray<float> Data;
+        [ReadOnly, NativeDisableParallelForRestriction] public NativeArray<float> Grad;
+        [NativeDisableParallelForRestriction] public NativeArray<float> M;
+        [NativeDisableParallelForRestriction] public NativeArray<float> V;
+        public int MomentOffset;
+        public float LR, Beta1, Beta2, Epsilon, InvBias1, InvBias2;
+
+        public void Execute( int j )
+        {
+            int idx = MomentOffset + j;
+            float grad = Grad[ j ];
+
+            float m = Beta1 * M[ idx ] + (1f - Beta1) * grad;
+            float v = Beta2 * V[ idx ] + (1f - Beta2) * grad * grad;
+
+            M[ idx ] = m;
+            V[ idx ] = v;
+
+            float mHat = m * InvBias1;
+            float vHat = v * InvBias2;
+
+            Data[ j ] -= LR * mHat / (math.sqrt( vHat ) + Epsilon);
+        }
+    }
     //------------------------------------------------------------------
 }

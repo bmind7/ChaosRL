@@ -4,7 +4,7 @@ using System;
 
 namespace ChaosRL.Tests
 {
-    public class DistTests
+    public class DistTests : TensorScopedTestBase
     {
         //------------------------------------------------------------------
         [Test]

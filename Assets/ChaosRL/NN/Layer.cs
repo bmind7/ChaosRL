@@ -8,7 +8,7 @@ namespace ChaosRL
     /// Performs matrix multiplication: output = input @ weights + bias
     /// where input is (batch_size, num_inputs) and weights is (num_inputs, num_outputs).
     /// </summary>
-    public class Layer
+    public class Layer : IDisposable
     {
         //------------------------------------------------------------------
         public readonly int NumInputs;
@@ -26,6 +26,7 @@ namespace ChaosRL
         private readonly Tensor _weights; // Shape: (num_inputs, num_outputs)
         private readonly Tensor _bias;    // Shape: (num_outputs,)
         private readonly bool _nonLin;
+        private bool _disposed;
         //------------------------------------------------------------------
         /// <summary>
         /// Creates a new layer with He initialization.
@@ -62,6 +63,8 @@ namespace ChaosRL
         /// <returns>Output tensor of shape (batch_size, num_outputs)</returns>
         public Tensor Forward( Tensor input )
         {
+            ThrowIfDisposed();
+
             if (input.Shape.Length != 2)
                 throw new ArgumentException( $"Expected 2D input tensor, got shape [{string.Join( ", ", input.Shape )}]" );
 
@@ -87,8 +90,26 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public void ZeroGrad()
         {
+            ThrowIfDisposed();
+
             _weights.ZeroGrad();
             _bias.ZeroGrad();
+        }
+        //------------------------------------------------------------------
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            _weights.Dispose();
+            _bias.Dispose();
+        }
+        //------------------------------------------------------------------
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException( nameof( Layer ) );
         }
         //------------------------------------------------------------------
         public override string ToString()

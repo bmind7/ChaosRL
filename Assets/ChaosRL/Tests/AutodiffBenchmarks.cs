@@ -10,7 +10,8 @@ namespace ChaosRL.Tests
     /// Performance benchmarks comparing scalar Value vs vectorized Tensor operations.
     /// Run in Release mode for accurate results.
     /// </summary>
-    public class AutodiffBenchmarks
+    [TestFixture, Explicit( "Performance benchmarks - run manually" ), Category( "Performance" )]
+    public class AutodiffBenchmarks : TensorScopedTestBase
     {
         private const int WarmupIterations = 10;
         private const int BenchmarkIterations = 100;
@@ -362,14 +363,14 @@ namespace ChaosRL.Tests
             sw.Restart();
             for (int iter = 0; iter < iterations; iter++)
             {
-                var t1 = new Tensor( new int[] { size } );
-                var t2 = new Tensor( new int[] { size } );
+                using var t1 = new Tensor( new int[] { size } );
+                using var t2 = new Tensor( new int[] { size } );
                 for (int i = 0; i < size; i++)
                 {
                     t1.Data[ i ] = i * 0.1f;
                     t2.Data[ i ] = (size - i) * 0.1f;
                 }
-                _ = t1 + t2;
+                using var sum = t1 + t2;
             }
             sw.Stop();
             var tensorTime = sw.Elapsed.TotalMilliseconds;
@@ -461,17 +462,21 @@ namespace ChaosRL.Tests
                 data2[ i ] = (size - i) * 0.1f;
             }
 
-            var tensor1 = new Tensor( shape, data1 );
-            var tensor2 = new Tensor( shape, data2 );
+            using var tensor1 = new Tensor( shape, data1 );
+            using var tensor2 = new Tensor( shape, data2 );
 
             switch (operation)
             {
                 case "Addition":
-                    _ = tensor1 + tensor2;
+                {
+                    using var result = tensor1 + tensor2;
                     break;
+                }
                 case "Multiplication":
-                    _ = tensor1 * tensor2;
+                {
+                    using var result = tensor1 * tensor2;
                     break;
+                }
             }
         }
         //------------------------------------------------------------------
@@ -557,11 +562,12 @@ namespace ChaosRL.Tests
                 bData[ i ] = 0.1f;
             }
 
-            var x = new Tensor( shape, xData );
-            var w = new Tensor( shape, wData );
-            var b = new Tensor( shape, bData );
-
-            _ = (x * w + b).Tanh();
+            using var x = new Tensor( shape, xData );
+            using var w = new Tensor( shape, wData );
+            using var b = new Tensor( shape, bData );
+            using var mul = x * w;
+            using var add = mul + b;
+            using var tanh = add.Tanh();
         }
         //------------------------------------------------------------------
         private void BenchmarkForwardBackward( int[] shape )
@@ -643,17 +649,17 @@ namespace ChaosRL.Tests
                 wData[ i ] = 0.5f;
             }
 
-            var x = new Tensor( new[] { size }, xData );
-            var w = new Tensor( new[] { size }, wData );
-
-            var result = (x * w).Tanh();
+            using var x = new Tensor( new[] { size }, xData );
+            using var w = new Tensor( new[] { size }, wData );
+            using var mul = x * w;
+            using var result = mul.Tanh();
 
             // Sum reduction (manual for now)
             float sum = 0f;
             for (int i = 0; i < result.Size; i++)
                 sum += result.Data[ i ];
 
-            var loss = new Tensor( sum );
+            using var loss = new Tensor( sum );
             loss.Backward();
         }
         //------------------------------------------------------------------
@@ -732,10 +738,9 @@ namespace ChaosRL.Tests
             for (int i = 0; i < K * N; i++)
                 bData[ i ] = i * 0.01f;
 
-            var a = new Tensor( new[] { M, K }, aData );
-            var b = new Tensor( new[] { K, N }, bData );
-
-            _ = a.MatMul( b );
+            using var a = new Tensor( new[] { M, K }, aData );
+            using var b = new Tensor( new[] { K, N }, bData );
+            using var result = a.MatMul( b );
         }
         //------------------------------------------------------------------
         private void BenchmarkMatMulForwardBackward( int M, int K, int N )
@@ -819,13 +824,12 @@ namespace ChaosRL.Tests
             for (int i = 0; i < K * N; i++)
                 bData[ i ] = i * 0.01f;
 
-            var a = new Tensor( new[] { M, K }, aData );
-            var b = new Tensor( new[] { K, N }, bData );
-
-            var result = a.MatMul( b );
+            using var a = new Tensor( new[] { M, K }, aData );
+            using var b = new Tensor( new[] { K, N }, bData );
+            using var result = a.MatMul( b );
 
             // Sum reduction
-            var loss = result.Sum();
+            using var loss = result.Sum();
             loss.Backward();
         }
         //------------------------------------------------------------------
@@ -837,8 +841,8 @@ namespace ChaosRL.Tests
             Debug.Log( $"\n=== Tensor MatMul Benchmark: {M}×{K} @ {K}×{N} ===" );
 
             // Pre-allocate and populate tensors once
-            var a = new Tensor( new[] { M, K } );
-            var b = new Tensor( new[] { K, N } );
+            using var a = new Tensor( new[] { M, K } );
+            using var b = new Tensor( new[] { K, N } );
             for (int j = 0; j < M * K; j++)
                 a.Data[ j ] = j * 0.01f;
             for (int j = 0; j < K * N; j++)
@@ -847,14 +851,14 @@ namespace ChaosRL.Tests
             // Warmup
             for (int i = 0; i < warmup; i++)
             {
-                _ = a.MatMul( b );
+                using var result = a.MatMul( b );
             }
 
             // Benchmark MatMul only
             var sw = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < iterations; i++)
             {
-                _ = a.MatMul( b );
+                using var result = a.MatMul( b );
             }
             sw.Stop();
 
@@ -874,8 +878,8 @@ namespace ChaosRL.Tests
             Debug.Log( $"\n=== Tensor MatMul + Backward Benchmark: {M}×{K} @ {K}×{N} ===" );
 
             // Pre-allocate and populate tensors once
-            var a = new Tensor( new[] { M, K } );
-            var b = new Tensor( new[] { K, N } );
+            using var a = new Tensor( new[] { M, K } );
+            using var b = new Tensor( new[] { K, N } );
             for (int j = 0; j < M * K; j++)
                 a.Data[ j ] = j * 0.01f;
             for (int j = 0; j < K * N; j++)
@@ -884,8 +888,8 @@ namespace ChaosRL.Tests
             // Warmup
             for (int i = 0; i < warmup; i++)
             {
-                var result = a.MatMul( b );
-                var loss = result.Sum();
+                using var result = a.MatMul( b );
+                using var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();
@@ -895,8 +899,8 @@ namespace ChaosRL.Tests
             var sw = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < iterations; i++)
             {
-                var result = a.MatMul( b );
-                var loss = result.Sum();
+                using var result = a.MatMul( b );
+                using var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();
