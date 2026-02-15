@@ -14,8 +14,12 @@ namespace ChaosRL
     public class TensorStorage : IDisposable
     {
         //------------------------------------------------------------------
-        /// <summary>Raw backing buffer. CPU path: <see cref="NativeArray{T}"/> with Allocator.Persistent.</summary>
-        public ref NativeArray<float> Buffer => ref _buffer;
+        /// <summary>
+        /// Raw backing buffer. Internal so only the ChaosRL assembly (CpuBackend, TensorOps,
+        /// TensorJobs) can access the <see cref="NativeArray{T}"/> directly. External code
+        /// should use the element indexer <c>this[int]</c> or <see cref="CopyFrom"/>/<see cref="CopyTo"/>.
+        /// </summary>
+        internal ref NativeArray<float> Buffer => ref _buffer;
 
         /// <summary>Which device this storage resides on.</summary>
         public TensorDevice Device => _device;

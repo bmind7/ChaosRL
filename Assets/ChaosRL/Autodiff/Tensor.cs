@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 
-using Unity.Collections;
-
 namespace ChaosRL
 {
     /// <summary>
@@ -45,11 +43,11 @@ namespace ChaosRL
         /// <summary>Underlying ref-counted gradient storage.</summary>
         public TensorStorage GradStorage { get; private set; }
 
-        /// <summary>Convenience accessor — returns the NativeArray for Burst jobs and element access.</summary>
-        public ref NativeArray<float> Data => ref DataStorage.Buffer;
+        /// <summary>Device-agnostic data accessor. Supports element access via indexer: <c>Data[i]</c>.</summary>
+        public TensorStorage Data => DataStorage;
 
-        /// <summary>Convenience accessor — returns the NativeArray for Burst jobs and element access.</summary>
-        public ref NativeArray<float> Grad => ref GradStorage.Buffer;
+        /// <summary>Device-agnostic gradient accessor. Supports element access via indexer: <c>Grad[i]</c>.</summary>
+        public TensorStorage Grad => GradStorage;
 
         public int[] Shape { get; private set; }
         public int Size { get; private set; }
@@ -68,6 +66,19 @@ namespace ChaosRL
         private bool _disposed;
 
         //------------------------------------------------------------------
+        /// <summary>Scalar readback shorthand. Equivalent to <c>Data[0]</c>. Asserts the tensor is scalar.</summary>
+        public float Scalar
+        {
+            get
+            {
+                if (Size != 1)
+                    throw new InvalidOperationException(
+                        $"Scalar requires a scalar tensor (size 1), but this tensor has size {Size}. Use Data[i] or an indexer for non-scalar access." );
+                return DataStorage[ 0 ];
+            }
+        }
+        //------------------------------------------------------------------
+        // N-D indexer — validates rank and bounds via ToFlatIndex.
         public float this[ params int[] indices ]
         {
             get => DataStorage[ ToFlatIndex( indices ) ];
@@ -675,8 +686,7 @@ namespace ChaosRL
 
             result._backward = () =>
             {
-                // Gradient only flows to the max element
-                Grad[ maxIdx ] += result.Grad[ 0 ];
+                Backend.MaxReduceBackward( GradStorage, result.GradStorage, maxIdx );
             };
 
             return result;
@@ -720,32 +730,8 @@ namespace ChaosRL
             // Store indices of max elements for backward pass
             var maxIndices = new int[ result.Size ];
 
-            // Forward: find max along dimension
-            for (int outer = 0; outer < outerSize; outer++)
-            {
-                int baseBlock = outer * blockSize;
-
-                for (int inner = 0; inner < innerSize; inner++)
-                {
-                    int baseIdx = baseBlock + inner;
-                    float maxVal = float.MinValue;
-                    int maxLocalIdx = 0;
-
-                    for (int d = 0; d < dimSize; d++)
-                    {
-                        int idx = baseIdx + d * innerSize;
-                        if (Data[ idx ] > maxVal)
-                        {
-                            maxVal = Data[ idx ];
-                            maxLocalIdx = d;
-                        }
-                    }
-
-                    int outIdx = outer * innerSize + inner;
-                    result.Data[ outIdx ] = maxVal;
-                    maxIndices[ outIdx ] = baseIdx + maxLocalIdx * innerSize;
-                }
-            }
+            // Forward: find max along dimension via backend
+            Backend.MaxReduceDim( DataStorage, result.DataStorage, maxIndices, outerSize, dimSize, innerSize );
 
             result.RequiresGrad = this.RequiresGrad;
             if (result.RequiresGrad == false)
@@ -754,10 +740,7 @@ namespace ChaosRL
             // Backward: gradient only flows to max elements
             result._backward = () =>
             {
-                for (int i = 0; i < result.Size; i++)
-                {
-                    Grad[ maxIndices[ i ] ] += result.Grad[ i ];
-                }
+                Backend.MaxReduceDimBackward( GradStorage, result.GradStorage, maxIndices, result.Size );
             };
 
             return result;

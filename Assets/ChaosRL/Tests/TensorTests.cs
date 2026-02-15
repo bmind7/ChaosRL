@@ -37,7 +37,9 @@ namespace ChaosRL.Tests
             var data = new[] { 1f, 2f, 3f, 4f };
             var t = new Tensor( new[] { 2, 2 }, data );
 
-            Assert.That( t.Data, Is.EqualTo( data ) );
+            var actual = new float[ t.Size ];
+            t.DataStorage.CopyTo( actual );
+            Assert.That( actual, Is.EqualTo( data ) );
             Assert.That( t.Size, Is.EqualTo( 4 ) );
         }
         //------------------------------------------------------------------
@@ -492,11 +494,17 @@ namespace ChaosRL.Tests
             var normalized = a.Normalize();
 
             // Verify mean is approximately 0
-            var mean = normalized.Data.Average();
+            float sum = 0f;
+            for (int i = 0; i < normalized.Size; i++)
+                sum += normalized.Data[ i ];
+            var mean = sum / normalized.Size;
             Assert.That( mean, Is.EqualTo( 0f ).Within( 1e-5 ) );
 
             // Verify variance is approximately 1
-            var variance = normalized.Data.Select( x => x * x ).Average();
+            float sumSq = 0f;
+            for (int i = 0; i < normalized.Size; i++)
+                sumSq += normalized.Data[ i ] * normalized.Data[ i ];
+            var variance = sumSq / normalized.Size;
             Assert.That( variance, Is.EqualTo( 1f ).Within( 1e-5 ) );
         }
         //------------------------------------------------------------------
@@ -2059,11 +2067,13 @@ namespace ChaosRL.Tests
 
             Assert.That( b.Shape, Is.EqualTo( new[] { 6 } ) );
             Assert.That( b.Size, Is.EqualTo( 6 ) );
-            Assert.That( b.Data, Is.EqualTo( new[] { 1f, 2f, 3f, 4f, 5f, 6f } ) );
+            var reshapedData = new float[ b.Size ];
+            b.DataStorage.CopyTo( reshapedData );
+            Assert.That( reshapedData, Is.EqualTo( new[] { 1f, 2f, 3f, 4f, 5f, 6f } ) );
 
-            // Verify data is shared
-            Assert.That( a.Data == b.Data );
-            Assert.That( a.Grad == b.Grad );
+            // Verify storage is shared (view op)
+            Assert.That( ReferenceEquals( a.DataStorage, b.DataStorage ) );
+            Assert.That( ReferenceEquals( a.GradStorage, b.GradStorage ) );
         }
         //------------------------------------------------------------------
         [Test]
@@ -2490,8 +2500,15 @@ namespace ChaosRL.Tests
             output.Backward();
 
             // No gradients accumulated
-            Assert.That( input.Grad.Sum( x => x ), Is.EqualTo( 0f ) );
-            Assert.That( weights.Grad.Sum( x => x ), Is.EqualTo( 0f ) );
+            float inputGradSum = 0f;
+            for (int i = 0; i < input.Size; i++)
+                inputGradSum += input.Grad[ i ];
+            Assert.That( inputGradSum, Is.EqualTo( 0f ) );
+
+            float weightsGradSum = 0f;
+            for (int i = 0; i < weights.Size; i++)
+                weightsGradSum += weights.Grad[ i ];
+            Assert.That( weightsGradSum, Is.EqualTo( 0f ) );
         }
         //------------------------------------------------------------------
         [Test]

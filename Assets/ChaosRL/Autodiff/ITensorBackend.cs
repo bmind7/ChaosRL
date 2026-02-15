@@ -146,6 +146,13 @@ namespace ChaosRL
         void MaxReduceDim( TensorStorage input, TensorStorage output, int[] maxIndices,
                            int outerSize, int dimSize, int innerSize );
 
+        /// <summary>Backward for MaxReduce: gradient flows only to the max element.</summary>
+        void MaxReduceBackward( TensorStorage inputGrad, TensorStorage outputGrad, int maxIdx );
+
+        /// <summary>Backward for MaxReduceDim: gradient flows to stored max-element positions.</summary>
+        void MaxReduceDimBackward( TensorStorage inputGrad, TensorStorage outputGrad,
+                                   int[] maxIndices, int resultSize );
+
         //------------------------------------------------------------------
         //  MatMul
         //------------------------------------------------------------------
@@ -186,6 +193,13 @@ namespace ChaosRL
         /// <summary>ExpandLast backward: accumulate gradients from replicated elements.</summary>
         void ExpandLastBackward( TensorStorage inputGrad, TensorStorage outputGrad,
                                  int inputSize, int num );
+
+        /// <summary>
+        /// Gather rows from source into dest using an index array.
+        /// Each index selects a contiguous block of <paramref name="featureSize"/> elements.
+        /// </summary>
+        void Gather( TensorStorage source, TensorStorage dest,
+                     int[] indices, int startIdx, int count, int featureSize );
 
         //------------------------------------------------------------------
         //  Utility

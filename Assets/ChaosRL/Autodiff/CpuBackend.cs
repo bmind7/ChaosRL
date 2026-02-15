@@ -409,6 +409,20 @@ namespace ChaosRL
                 }
             }
         }
+        //------------------------------------------------------------------
+        public void MaxReduceBackward( TensorStorage inputGrad, TensorStorage outputGrad, int maxIdx )
+        {
+            inputGrad[ maxIdx ] += outputGrad[ 0 ];
+        }
+        //------------------------------------------------------------------
+        public void MaxReduceDimBackward( TensorStorage inputGrad, TensorStorage outputGrad,
+                                          int[] maxIndices, int resultSize )
+        {
+            for (int i = 0; i < resultSize; i++)
+            {
+                inputGrad[ maxIndices[ i ] ] += outputGrad[ i ];
+            }
+        }
 
         //==================================================================
         //  MatMul
@@ -510,6 +524,21 @@ namespace ChaosRL
         {
             new ExpandLastBackwardJob { InputGrad = inputGrad.Buffer, OutputGrad = outputGrad.Buffer, Num = num }
                 .Schedule( inputSize, TensorOps.GetBatchSize( inputSize ) ).Complete();
+        }
+        //------------------------------------------------------------------
+        public void Gather( TensorStorage source, TensorStorage dest,
+                            int[] indices, int startIdx, int count, int featureSize )
+        {
+            var srcBuf = source.Buffer;
+            var dstBuf = dest.Buffer;
+
+            for (int i = 0; i < count; i++)
+            {
+                int srcRow = indices[ startIdx + i ];
+                int srcStart = srcRow * featureSize;
+                int dstStart = i * featureSize;
+                NativeArray<float>.Copy( srcBuf, srcStart, dstBuf, dstStart, featureSize );
+            }
         }
 
         //==================================================================

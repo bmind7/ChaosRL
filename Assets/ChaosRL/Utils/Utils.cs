@@ -1,7 +1,5 @@
 using System;
 
-using Unity.Collections;
-
 namespace ChaosRL
 {
     public static class Utils
@@ -9,7 +7,8 @@ namespace ChaosRL
         //------------------------------------------------------------------
         /// <summary>
         /// Extracts a minibatch from a source tensor based on shuffled indices.
-        /// Supports 1D and 2D tensors.
+        /// Supports 1D and 2D tensors. Delegates element copying to the tensor's backend
+        /// so the implementation stays device-agnostic.
         /// </summary>
         /// <param name="source">Source tensor to extract from</param>
         /// <param name="indices">Shuffled indices array</param>
@@ -23,14 +22,17 @@ namespace ChaosRL
 
             // Determine result shape based on source dimensions
             int[] resultShape;
+            int featureSize;
             if (source.Shape.Length == 2)
             {
                 // [N, features] -> [mbSize, features]
-                resultShape = new int[] { mbSize, source.Shape[ 1 ] };
+                featureSize = source.Shape[ 1 ];
+                resultShape = new int[] { mbSize, featureSize };
             }
             else if (source.Shape.Length == 1)
             {
                 // [N] -> [mbSize]
+                featureSize = 1;
                 resultShape = new int[] { mbSize };
             }
             else
@@ -40,25 +42,8 @@ namespace ChaosRL
 
             var result = new Tensor( resultShape, requiresGrad: false, device: source.Device );
 
-            if (source.Shape.Length == 2)
-            {
-                int features = source.Shape[ 1 ];
-                for (int i = 0; i < mbSize; i++)
-                {
-                    int srcIdx = indices[ start + i ];
-                    int srcStart = source.ToFlatIndex( new[] { srcIdx, 0 } );
-                    int dstStart = result.ToFlatIndex( new[] { i, 0 } );
-                    NativeArray<float>.Copy( source.Data, srcStart, result.Data, dstStart, features );
-                }
-            }
-            else // 1D
-            {
-                for (int i = 0; i < mbSize; i++)
-                {
-                    int srcIdx = indices[ start + i ];
-                    result.Data[ i ] = source.Data[ srcIdx ];
-                }
-            }
+            // Gather rows via backend — device-agnostic
+            source.Backend.Gather( source.DataStorage, result.DataStorage, indices, start, mbSize, featureSize );
 
             return result;
         }
