@@ -66,9 +66,9 @@ namespace ChaosRL
             var aG = aGrad.Buffer;
             var bG = bGrad.Buffer;
             var rG = resultGrad.Buffer;
-            if (aG == bG)
+            // Serial when aliased (a+a) or broadcasting (multiple results accumulate to same grad slot).
+            if (aG == bG || sizeA < resultSize || sizeB < resultSize)
             {
-                // Aliased: same tensor on both sides (e.g. a + a). Fall back to sequential.
                 for (int i = 0; i < resultSize; i++)
                 {
                     float g = rG[ i ];
@@ -100,7 +100,8 @@ namespace ChaosRL
             var aG = aGrad.Buffer;
             var bG = bGrad.Buffer;
             var rG = resultGrad.Buffer;
-            if (aG == bG)
+            // Serial when aliased or broadcasting (parallel += would race on shared grad slots).
+            if (aG == bG || sizeA < resultSize || sizeB < resultSize)
             {
                 for (int i = 0; i < resultSize; i++)
                 {
@@ -135,7 +136,8 @@ namespace ChaosRL
             var aG = aGrad.Buffer;
             var bG = bGrad.Buffer;
             var rG = resultGrad.Buffer;
-            if (aG == bG)
+            // Serial when aliased or broadcasting (parallel += would race on shared grad slots).
+            if (aG == bG || sizeA < resultSize || sizeB < resultSize)
             {
                 for (int i = 0; i < resultSize; i++)
                 {
@@ -173,7 +175,8 @@ namespace ChaosRL
             var aG = aGrad.Buffer;
             var bG = bGrad.Buffer;
             var rG = resultGrad.Buffer;
-            if (aG == bG)
+            // Serial when aliased or broadcasting (parallel += would race on shared grad slots).
+            if (aG == bG || sizeA < resultSize || sizeB < resultSize)
             {
                 for (int i = 0; i < resultSize; i++)
                 {
@@ -211,7 +214,8 @@ namespace ChaosRL
             var aG = aGrad.Buffer;
             var bG = bGrad.Buffer;
             var rG = resultGrad.Buffer;
-            if (aG == bG)
+            // Serial when aliased or broadcasting (parallel += would race on shared grad slots).
+            if (aG == bG || sizeA < resultSize || sizeB < resultSize)
             {
                 for (int i = 0; i < resultSize; i++)
                 {
