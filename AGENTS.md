@@ -8,6 +8,7 @@ Unity 6 (C#) project implementing PPO reinforcement learning from scratch with a
 - Once a plan is verified, save it to `Doc/WIP/PLAN.md`.
 
 ## Code Reviewing
+- Check if there is feature plan available in `Doc/WIP/PLAN.md` to get more context 
 - Pay attention to code duplication and flag repeated logic where aplicable.
 - Prefer simple solutions and avoid unnecessary complexity.
 - Do not overengineer; match the solution to the actual scope.
