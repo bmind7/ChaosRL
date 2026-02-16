@@ -25,7 +25,7 @@ Unity 6 (C#) project implementing PPO reinforcement learning from scratch with a
 - Avoid duplicating documentation content that may already exist from previous commits; update existing sections instead.
 
 ## Architecture
-- **Autodiff Core** (`Assets/ChaosRL/Autodiff/`): `Tensor` (row-major N-D with dynamic autograd graph), `TensorStorage` (ref-counted buffer wrapper), `ITensorBackend` (device-agnostic compute interface), `CpuBackend` (Burst job implementation of `ITensorBackend`), `TensorDevice` (CPU/GPU enum), `TensorOps` (MatMul orchestration & batch-size helpers), `TensorJobs` (Burst-compiled kernels). `Value` is the legacy scalar autodiff path kept for tests/benchmarks.
+- **Autodiff Core** (`Assets/ChaosRL/Autodiff/`): `Tensor` (row-major N-D with dynamic autograd graph), `TensorStorage` (ref-counted buffer wrapper), `ITensorBackend` (device-agnostic compute interface), `CpuBackend` (Burst job implementation of `ITensorBackend`), `TensorDevice` (CPU/GPU enum), `CpuMatMulOps` (internal CPU-specific MatMul orchestration), `TensorJobs` (Burst-compiled kernels). `Value` is the legacy scalar autodiff path kept for tests/benchmarks.
 - **NN Stack** (`Assets/ChaosRL/NN/`): `Layer` (dense + optional Tanh), `MLP` (multi-layer perceptron), `AdamOptimizer`, `L2Regularizer`.
 - **RL Training** (`Assets/ChaosRL/RL/`): `Academy` (singleton MonoBehaviour, PPO loop with GAE, rollout buffers, minibatch SGD), `ArenaGridSpawner`.
 - **Agent** (`Assets/Src/ChaosAgent.cs`): Physics-side agent collecting observations and applying actions. Lives in `Assembly-CSharp`, not the `ChaosRL` assembly.
@@ -41,6 +41,7 @@ All production code uses the flat `ChaosRL` namespace; tests use `ChaosRL.Tests`
 - **XML doc comments** (`/// <summary>`) on public API surface. Inline `//` for implementation notes.
 - **`// TODO:`** and **`// Note:`** for future work and domain caveats.
 - **No sub-namespaces** despite folder structure — all production types are in `namespace ChaosRL`.
+- **Encoding**: Prefer plain ASCII text in code/comments/docs; avoid fancy Unicode symbols to reduce encoding issues.
 
 ## Tensor Operator Pattern
 Every operator/activation follows this structure — maintain it when adding new ops:
@@ -52,10 +53,10 @@ Every operator/activation follows this structure — maintain it when adding new
 6. Return result.
 
 ## Burst Jobs
-- **Job structs** go in `TensorJobs.cs`; **element-wise scheduling** goes in `CpuBackend.cs`; **MatMul orchestration** stays in `TensorOps.cs`.
+- **Job structs** go in `TensorJobs.cs`; **element-wise scheduling** goes in `CpuBackend.cs`; **MatMul orchestration** stays in `CpuMatMulOps.cs`.
 - Attribute: `[BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low, DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]`.
 - Use `IJobParallelFor` with `[ReadOnly]`/`[WriteOnly]`/`[NativeDisableParallelForRestriction]` annotations.
-- Batch size via `TensorOps.GetBatchSize()` based on `JobsUtility.JobWorkerCount`.
+- Batch size via `CpuBackend.GetBatchSize()` (internal, based on `JobsUtility.JobWorkerCount`).
 
 ## Memory Management
 - `Tensor` implements `IDisposable`; backing memory lives in `TensorStorage` (ref-counted `NativeArray<float>`, `Allocator.Persistent`).

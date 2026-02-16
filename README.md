@@ -32,7 +32,7 @@ Everything runs on top of a custom **autodiff engine** and a **minimal PPO imple
 ### 💻 Code to look at
 - **Value.cs** simple implementation of AutoDiff, easy to understand 
 - **Tensor.cs** data oriented implementation of AutoDiff
-- **TensorOps.cs** GEBP algorithm orchestration and Burst job scheduling
+- **CpuMatMulOps.cs** GEBP algorithm orchestration and Burst job scheduling
 - **Academy.cs** PPO implementation
 
 ---

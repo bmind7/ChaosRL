@@ -15,7 +15,7 @@ namespace ChaosRL
     {
         //------------------------------------------------------------------
         /// <summary>
-        /// Raw backing buffer. Internal so only the ChaosRL assembly (CpuBackend, TensorOps,
+        /// Raw backing buffer. Internal so only the ChaosRL assembly (CpuBackend, CpuMatMulOps,
         /// TensorJobs) can access the <see cref="NativeArray{T}"/> directly. External code
         /// should use the element indexer <c>this[int]</c> or <see cref="CopyFrom"/>/<see cref="CopyTo"/>.
         /// </summary>

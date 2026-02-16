@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Assets/ChaosRL/AssemblyInfo.cs` with `InternalsVisibleTo("ChaosRLTests")`
 
 ### Changed
+- Renamed `TensorOps` to `CpuMatMulOps` - explicitly scoped as an internal CPU-specific MatMul orchestration helper for `CpuBackend`, removing ambiguity with the backend abstraction layer
+- Consolidated `GetBatchSize()` into `CpuBackend` as a single `internal static` helper - both `CpuBackend` and `CpuMatMulOps` now share the same batch-size policy
+- Tightened `CpuMatMulOps` visibility to `internal` (class, constants, and scheduling methods) - it is an implementation detail of `CpuBackend`, not part of the public API
 - `Tensor` now dispatches operations through a cached backend and validates device compatibility per operation
 - View operations (`Reshape`, `Squeeze`, `Unsqueeze`) share `TensorStorage` with reference counting
 - `Tensor.Backward()` seeds gradients through backend utilities; scalar readback uses `Tensor.Scalar`

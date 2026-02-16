@@ -22,7 +22,7 @@ The focus is runtime C# systems (autodiff, NN, PPO, and compute backends), not s
 |---|---|---|
 | Autodiff core | Tensor graph, storage ownership, backend dispatch, shape ops | `Tensor`, `TensorStorage`, `TensorScope`, `TensorDevice` |
 | Backend abstraction | Device-agnostic kernel API and CPU implementation | `ITensorBackend`, `CpuBackend` |
-| Burst kernels and scheduling | Low-level jobs and matmul orchestration | `TensorJobs`, `TensorOps` |
+| Burst kernels and scheduling | Low-level jobs and matmul orchestration | `TensorJobs`, `CpuMatMulOps` |
 | Neural network stack | Dense layers, model composition, optimization, regularization | `Layer`, `MLP`, `AdamOptimizer`, `L2Regularizer` |
 | RL training | PPO rollouts, GAE, minibatch updates | `Academy`, `ArenaGridSpawner` |
 | Probability and utilities | Gaussian policy math, RNG, minibatch extraction | `Dist`, `RandomHub`, `Utils` |
@@ -85,10 +85,10 @@ The focus is runtime C# systems (autodiff, NN, PPO, and compute backends), not s
 - Contains Burst jobs for element-wise forward/backward, reductions, slicing/expand, optimizer step, transpose, and matmul kernels.
 - Matmul jobs include naive path plus packed-panel GEBP path.
 
-### `TensorOps` (`Assets/ChaosRL/Autodiff/TensorOps.cs`)
+### `CpuMatMulOps` (`Assets/ChaosRL/Autodiff/CpuMatMulOps.cs`)
+- Internal CPU-specific MatMul orchestration for `CpuBackend`.
 - Orchestrates transpose and matmul scheduling.
 - Auto-selects naive vs GEBP path by dimension threshold.
-- Computes `IJobParallelFor` batch size from worker count.
 
 ### `Layer` and `MLP` (`Assets/ChaosRL/NN`)
 - `Layer` = dense affine transform + optional `Tanh`.
@@ -151,7 +151,7 @@ Autodiff and backend files:
 - `Assets/ChaosRL/Autodiff/TensorDevice.cs`
 - `Assets/ChaosRL/Autodiff/ITensorBackend.cs`
 - `Assets/ChaosRL/Autodiff/CpuBackend.cs`
-- `Assets/ChaosRL/Autodiff/TensorOps.cs`
+- `Assets/ChaosRL/Autodiff/CpuMatMulOps.cs`
 - `Assets/ChaosRL/Autodiff/TensorJobs.cs`
 - `Assets/ChaosRL/Autodiff/Value.cs`
 - `Assets/ChaosRL/Autodiff/ValueExtensions.cs`

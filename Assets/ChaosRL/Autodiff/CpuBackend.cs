@@ -3,6 +3,7 @@ using System;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
+using Unity.Jobs.LowLevel.Unsafe;
 
 namespace ChaosRL
 {
@@ -22,35 +23,35 @@ namespace ChaosRL
                          int sizeA, int sizeB, int resultSize )
         {
             new ElementAddJob { A = a.Buffer, B = b.Buffer, Result = result.Buffer, SizeA = sizeA, SizeB = sizeB }
-                .Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+                .Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Mul( TensorStorage a, TensorStorage b, TensorStorage result,
                          int sizeA, int sizeB, int resultSize )
         {
             new ElementMulJob { A = a.Buffer, B = b.Buffer, Result = result.Buffer, SizeA = sizeA, SizeB = sizeB }
-                .Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+                .Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Div( TensorStorage a, TensorStorage b, TensorStorage result,
                          int sizeA, int sizeB, int resultSize )
         {
             new ElementDivJob { A = a.Buffer, B = b.Buffer, Result = result.Buffer, SizeA = sizeA, SizeB = sizeB }
-                .Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+                .Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ElementMax( TensorStorage a, TensorStorage b, TensorStorage result,
                                 int sizeA, int sizeB, int resultSize )
         {
             new ElementMaxJob { A = a.Buffer, B = b.Buffer, Result = result.Buffer, SizeA = sizeA, SizeB = sizeB }
-                .Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+                .Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ElementMin( TensorStorage a, TensorStorage b, TensorStorage result,
                                 int sizeA, int sizeB, int resultSize )
         {
             new ElementMinJob { A = a.Buffer, B = b.Buffer, Result = result.Buffer, SizeA = sizeA, SizeB = sizeB }
-                .Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+                .Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
 
         //==================================================================
@@ -86,7 +87,7 @@ namespace ChaosRL
                 SizeB = sizeB,
                 AGradScale = aGradScale,
                 BGradScale = bGradScale
-            }.Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+            }.Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void MulBackward( TensorStorage aData, TensorStorage bData,
@@ -122,7 +123,7 @@ namespace ChaosRL
                 SizeB = sizeB,
                 AGradScale = aGradScale,
                 BGradScale = bGradScale
-            }.Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+            }.Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void DivBackward( TensorStorage aData, TensorStorage bData,
@@ -161,7 +162,7 @@ namespace ChaosRL
                 SizeB = sizeB,
                 AGradScale = aGradScale,
                 BGradScale = bGradScale
-            }.Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+            }.Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ElementMaxBackward( TensorStorage aData, TensorStorage bData,
@@ -200,7 +201,7 @@ namespace ChaosRL
                 SizeB = sizeB,
                 AGradScale = aGradScale,
                 BGradScale = bGradScale
-            }.Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+            }.Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ElementMinBackward( TensorStorage aData, TensorStorage bData,
@@ -239,7 +240,7 @@ namespace ChaosRL
                 SizeB = sizeB,
                 AGradScale = aGradScale,
                 BGradScale = bGradScale
-            }.Schedule( resultSize, TensorOps.GetBatchSize( resultSize ) ).Complete();
+            }.Schedule( resultSize, GetBatchSize( resultSize ) ).Complete();
         }
 
         //==================================================================
@@ -250,37 +251,37 @@ namespace ChaosRL
         public void Pow( TensorStorage input, TensorStorage result, int size, float exponent )
         {
             new ElementPowJob { Input = input.Buffer, Result = result.Buffer, Exponent = exponent }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Exp( TensorStorage input, TensorStorage result, int size )
         {
             new ElementExpJob { Input = input.Buffer, Result = result.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Log( TensorStorage input, TensorStorage result, int size )
         {
             new ElementLogJob { Input = input.Buffer, Result = result.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ReLU( TensorStorage input, TensorStorage result, int size )
         {
             new ElementReLUJob { Input = input.Buffer, Result = result.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Tanh( TensorStorage input, TensorStorage result, int size )
         {
             new ElementTanhJob { Input = input.Buffer, Result = result.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Clamp( TensorStorage input, TensorStorage result, int size, float min, float max )
         {
             new ElementClampJob { Input = input.Buffer, Result = result.Buffer, Min = min, Max = max }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
 
         //==================================================================
@@ -292,42 +293,42 @@ namespace ChaosRL
                                  TensorStorage resultGrad, int size, float exponent )
         {
             new PowBackwardJob { InputData = inputData.Buffer, InputGrad = inputGrad.Buffer, ResultGrad = resultGrad.Buffer, Exponent = exponent }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ExpBackward( TensorStorage resultData, TensorStorage inputGrad,
                                  TensorStorage resultGrad, int size )
         {
             new ExpBackwardJob { ResultData = resultData.Buffer, InputGrad = inputGrad.Buffer, ResultGrad = resultGrad.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void LogBackward( TensorStorage inputData, TensorStorage inputGrad,
                                  TensorStorage resultGrad, int size )
         {
             new LogBackwardJob { InputData = inputData.Buffer, InputGrad = inputGrad.Buffer, ResultGrad = resultGrad.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ReLUBackward( TensorStorage inputData, TensorStorage inputGrad,
                                   TensorStorage resultGrad, int size )
         {
             new ReLUBackwardJob { InputData = inputData.Buffer, InputGrad = inputGrad.Buffer, ResultGrad = resultGrad.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void TanhBackward( TensorStorage resultData, TensorStorage inputGrad,
                                   TensorStorage resultGrad, int size )
         {
             new TanhBackwardJob { ResultData = resultData.Buffer, InputGrad = inputGrad.Buffer, ResultGrad = resultGrad.Buffer }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ClampBackward( TensorStorage inputData, TensorStorage inputGrad,
                                    TensorStorage resultGrad, int size, float min, float max )
         {
             new ClampBackwardJob { InputData = inputData.Buffer, InputGrad = inputGrad.Buffer, ResultGrad = resultGrad.Buffer, Min = min, Max = max }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
 
         //==================================================================
@@ -344,7 +345,7 @@ namespace ChaosRL
         {
             float gradVal = outputGrad[ 0 ];
             new AddScalarParallelJob { Target = inputGrad.Buffer, Value = gradVal }
-                .Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+                .Schedule( size, GetBatchSize( size ) ).Complete();
         }
         //------------------------------------------------------------------
         public void SumDim( TensorStorage input, TensorStorage output,
@@ -352,7 +353,7 @@ namespace ChaosRL
         {
             int outputSize = outerSize * innerSize;
             new SumDimJob { Input = input.Buffer, Output = output.Buffer, DimSize = dimSize, InnerSize = innerSize }
-                .Schedule( outputSize, TensorOps.GetBatchSize( outputSize ) ).Complete();
+                .Schedule( outputSize, GetBatchSize( outputSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void SumDimBackward( TensorStorage inputGrad, TensorStorage outputGrad,
@@ -360,7 +361,7 @@ namespace ChaosRL
         {
             int outputSize = outerSize * innerSize;
             new SumDimBackwardJob { InputGrad = inputGrad.Buffer, OutputGrad = outputGrad.Buffer, DimSize = dimSize, InnerSize = innerSize }
-                .Schedule( outputSize, TensorOps.GetBatchSize( outputSize ) ).Complete();
+                .Schedule( outputSize, GetBatchSize( outputSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void MaxReduce( TensorStorage input, TensorStorage output, int size, out int maxIdx )
@@ -436,7 +437,7 @@ namespace ChaosRL
         public void MatMul( TensorStorage a, TensorStorage b, TensorStorage c,
                             int M, int K, int N, bool accumulate )
         {
-            TensorOps.ScheduleMatMul( a.Buffer, b.Buffer, c.Buffer, M, K, N, accumulate ).Complete();
+            CpuMatMulOps.ScheduleMatMul( a.Buffer, b.Buffer, c.Buffer, M, K, N, accumulate ).Complete();
         }
         //------------------------------------------------------------------
         public void MatMulBackward( TensorStorage aData, TensorStorage bData,
@@ -454,8 +455,8 @@ namespace ChaosRL
             if (aRequiresGrad)
             {
                 tempBT = new NativeArray<float>( bSize, Allocator.TempJob );
-                var tBH = TensorOps.ScheduleTranspose( bData.Buffer, tempBT, K, N );
-                dAHandle = TensorOps.ScheduleMatMul(
+                var tBH = CpuMatMulOps.ScheduleTranspose( bData.Buffer, tempBT, K, N );
+                dAHandle = CpuMatMulOps.ScheduleMatMul(
                     resultGrad.Buffer, tempBT, aGrad.Buffer,
                     M, N, K, accumulate: true, dependsOn: tBH );
             }
@@ -463,8 +464,8 @@ namespace ChaosRL
             if (bRequiresGrad)
             {
                 tempAT = new NativeArray<float>( aSize, Allocator.TempJob );
-                var tAH = TensorOps.ScheduleTranspose( aData.Buffer, tempAT, M, K );
-                dBHandle = TensorOps.ScheduleMatMul(
+                var tAH = CpuMatMulOps.ScheduleTranspose( aData.Buffer, tempAT, M, K );
+                dBHandle = CpuMatMulOps.ScheduleMatMul(
                     tempAT, resultGrad.Buffer, bGrad.Buffer,
                     K, M, N, accumulate: true, dependsOn: tAH );
             }
@@ -498,7 +499,7 @@ namespace ChaosRL
                 DstBlockSize = dstBlockSize,
                 StartOffset = startOffset,
                 InnerSize = innerSize
-            }.Schedule( outerSize, TensorOps.GetBatchSize( outerSize ) ).Complete();
+            }.Schedule( outerSize, GetBatchSize( outerSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void SliceCopyBackward( TensorStorage srcGrad, TensorStorage dstGrad,
@@ -513,21 +514,21 @@ namespace ChaosRL
                 DstBlockSize = dstBlockSize,
                 StartOffset = startOffset,
                 InnerSize = innerSize
-            }.Schedule( outerSize, TensorOps.GetBatchSize( outerSize ) ).Complete();
+            }.Schedule( outerSize, GetBatchSize( outerSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ExpandLast( TensorStorage input, TensorStorage output,
                                 int inputSize, int num )
         {
             new ExpandLastJob { Input = input.Buffer, Output = output.Buffer, Num = num }
-                .Schedule( inputSize, TensorOps.GetBatchSize( inputSize ) ).Complete();
+                .Schedule( inputSize, GetBatchSize( inputSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void ExpandLastBackward( TensorStorage inputGrad, TensorStorage outputGrad,
                                         int inputSize, int num )
         {
             new ExpandLastBackwardJob { InputGrad = inputGrad.Buffer, OutputGrad = outputGrad.Buffer, Num = num }
-                .Schedule( inputSize, TensorOps.GetBatchSize( inputSize ) ).Complete();
+                .Schedule( inputSize, GetBatchSize( inputSize ) ).Complete();
         }
         //------------------------------------------------------------------
         public void Gather( TensorStorage source, TensorStorage dest,
@@ -589,7 +590,19 @@ namespace ChaosRL
                 Epsilon = epsilon,
                 InvBias1 = invBias1,
                 InvBias2 = invBias2
-            }.Schedule( size, TensorOps.GetBatchSize( size ) ).Complete();
+            }.Schedule( size, GetBatchSize( size ) ).Complete();
+        }
+
+        //==================================================================
+        //  Internal helpers
+        //==================================================================
+
+        //------------------------------------------------------------------
+        internal static int GetBatchSize( int totalWorkItems )
+        {
+            int workerCount = Math.Max( 1, JobsUtility.JobWorkerCount + 1 );
+            int batch = totalWorkItems / (workerCount * 4);
+            return Math.Max( 1, batch );
         }
         //------------------------------------------------------------------
     }
