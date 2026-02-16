@@ -3,6 +3,23 @@
 ## Project Overview
 Unity 6 (C#) project implementing PPO reinforcement learning from scratch with a custom autodiff engine. No external ML frameworks — everything (tensor math, autograd, neural nets, PPO) is hand-rolled. Uses Unity Burst/Jobs for CPU-vectorised compute.
 
+## Agent Planning
+- Keep plans short and practical; prefer the simplest solution that meets the goal (KISS principle) and avoid overengineering.
+- Once a plan is verified, save it to `Doc/WIP/PLAN.md`.
+
+## Code Reviewing
+- Pay attention to code duplication and flag repeated logic where aplicable.
+- Prefer simple solutions and avoid unnecessary complexity.
+- Do not overengineer; match the solution to the actual scope.
+- Keep code clean and easy to understand.
+- Once a review is complete, save it to `Doc/WIP/REVIEW.md`.
+
+## Feature Finalization
+- When asked to finalize a feature, compare uncommitted changes and update relevant documentation.
+- Run the finalization pass on the current branch, with primary focus on documentation quality.
+- Compare the current branch with `main` while finalizing to capture all feature-facing changes.
+- Avoid duplicating documentation content that may already exist from previous commits; update existing sections instead.
+
 ## Architecture
 - **Autodiff Core** (`Assets/ChaosRL/Autodiff/`): `Tensor` (row-major N-D with dynamic autograd graph), `TensorStorage` (ref-counted buffer wrapper), `ITensorBackend` (device-agnostic compute interface), `CpuBackend` (Burst job implementation of `ITensorBackend`), `TensorDevice` (CPU/GPU enum), `TensorOps` (MatMul orchestration & batch-size helpers), `TensorJobs` (Burst-compiled kernels). `Value` is the legacy scalar autodiff path kept for tests/benchmarks.
 - **NN Stack** (`Assets/ChaosRL/NN/`): `Layer` (dense + optional Tanh), `MLP` (multi-layer perceptron), `AdamOptimizer`, `L2Regularizer`.
