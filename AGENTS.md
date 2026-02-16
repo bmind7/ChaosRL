@@ -3,6 +3,9 @@
 ## Project Overview
 Unity 6 (C#) project implementing PPO reinforcement learning from scratch with a custom autodiff engine. No external ML frameworks — everything (tensor math, autograd, neural nets, PPO) is hand-rolled. Uses Unity Burst/Jobs for CPU-vectorised compute.
 
+## Useful References
+- When you need detailed architecture snapshot read `Doc/TECH_OVERVIEW.md`
+
 ## Agent Planning
 - Keep plans short and practical; prefer the simplest solution that meets the goal (KISS principle) and avoid overengineering.
 - Once a plan is verified, save it to `Doc/WIP/PLAN.md`.
