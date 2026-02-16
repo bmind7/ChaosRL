@@ -197,6 +197,7 @@ namespace ChaosRL
         /// <summary>
         /// Gather rows from source into dest using an index array.
         /// Each index selects a contiguous block of <paramref name="featureSize"/> elements.
+        /// Caller must ensure all indices are in valid range (0 to source.Length / featureSize - 1).
         /// </summary>
         void Gather( TensorStorage source, TensorStorage dest,
                      int[] indices, int startIdx, int count, int featureSize );

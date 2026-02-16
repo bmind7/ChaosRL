@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
@@ -531,6 +531,7 @@ namespace ChaosRL
                 .Schedule( inputSize, GetBatchSize( inputSize ) ).Complete();
         }
         //------------------------------------------------------------------
+        /// <remarks>Indices must be pre-validated by the caller (valid range: 0 to source.Length / featureSize - 1).</remarks>
         public void Gather( TensorStorage source, TensorStorage dest,
                             int[] indices, int startIdx, int count, int featureSize )
         {
