@@ -38,7 +38,7 @@ namespace ChaosRL.Tests
             var t = new Tensor( new[] { 2, 2 }, data );
 
             var actual = new float[ t.Size ];
-            t.DataStorage.CopyTo( actual );
+            t.Data.CopyTo( actual );
             Assert.That( actual, Is.EqualTo( data ) );
             Assert.That( t.Size, Is.EqualTo( 4 ) );
         }
@@ -514,7 +514,7 @@ namespace ChaosRL.Tests
             var a = new Tensor( new[] { 3 }, new[] { 0f, 2f, 3f } );
             var normalized = a.Normalize();
 
-            // Note: sum(normalize(x)) ≡ 0 for all x, so its gradient is identically zero.
+            // Note: sum(normalize(x)) == 0 for all x, so its gradient is identically zero.
             // Use a weighted sum with non-uniform weights to get meaningful gradients.
             var weights = new Tensor( new[] { 3 }, new[] { 1f, 2f, 3f }, requiresGrad: false );
             var loss = (normalized * weights).Sum();
@@ -986,8 +986,8 @@ namespace ChaosRL.Tests
         [Test]
         public void MatMul_NonSquareMatrices_ComputesCorrectly()
         {
-            // A = [[1, 2, 3]]  (1×3)
-            // B = [[4],        (3×1)
+            // A = [[1, 2, 3]]  (1x3)
+            // B = [[4],        (3x1)
             //      [5],
             //      [6]]
             var a = new Tensor( new[] { 1, 3 }, new[] { 1f, 2f, 3f } );
@@ -1003,14 +1003,14 @@ namespace ChaosRL.Tests
         [Test]
         public void MatMul_BatchMultiplication_ComputesCorrectly()
         {
-            // Simulating 2 batches × 3 features
+            // Simulating 2 batches x 3 features
             var input = new Tensor( new[] { 2, 3 }, new[] { 1f, 2f, 3f, 4f, 5f, 6f } );
-            // Weights: 3 inputs × 2 outputs
+            // Weights: 3 inputs x 2 outputs
             var weights = new Tensor( new[] { 3, 2 }, new[] { 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f } );
 
             var output = input.MatMul( weights );
 
-            // Output should be 2×2
+            // Output should be 2x2
             Assert.That( output.Shape, Is.EqualTo( new[] { 2, 2 } ) );
 
             // First batch: [1,2,3] @ [[0.1,0.2], [0.3,0.4], [0.5,0.6]]
@@ -1027,7 +1027,7 @@ namespace ChaosRL.Tests
         [Test]
         public void MatMul_Backward_ComputesGradientsCorrectly()
         {
-            // Simple 2×2 multiplication
+            // Simple 2x2 multiplication
             var a = new Tensor( new[] { 2, 2 }, new[] { 1f, 2f, 3f, 4f } );
             var b = new Tensor( new[] { 2, 2 }, new[] { 5f, 6f, 7f, 8f } );
 
@@ -1065,8 +1065,8 @@ namespace ChaosRL.Tests
             const int M = 2, K = 3, N = 2;
 
             // Input data
-            var aData = new[] { 1f, 2f, 3f, 4f, 5f, 6f }; // 2×3
-            var bData = new[] { 0.5f, 0.7f, 0.3f, 0.9f, 0.2f, 0.4f }; // 3×2
+            var aData = new[] { 1f, 2f, 3f, 4f, 5f, 6f }; // 2x3
+            var bData = new[] { 0.5f, 0.7f, 0.3f, 0.9f, 0.2f, 0.4f }; // 3x2
 
             // Tensor implementation
             var tensorA = new Tensor( new[] { M, K }, aData );
@@ -1125,7 +1125,7 @@ namespace ChaosRL.Tests
         public void MatMul_InvalidDimensions_ThrowsException()
         {
             var a = new Tensor( new[] { 2, 3 } );
-            var b = new Tensor( new[] { 2, 2 } ); // Wrong: should be 3×N
+            var b = new Tensor( new[] { 2, 2 } ); // Wrong: should be 3xN
 
             Assert.Throws<ArgumentException>( () => a.MatMul( b ) );
         }
@@ -1403,7 +1403,7 @@ namespace ChaosRL.Tests
         [Test]
         public void Sum_3DTensor_AlongMiddleDimension()
         {
-            // Shape [2, 3, 4]: 2 matrices of 3×4
+            // Shape [2, 3, 4]: 2 matrices of 3x4
             var a = new Tensor( new[] { 2, 3, 4 } );
             for (int i = 0; i < 24; i++)
                 a.Data[ i ] = i + 1;
@@ -1641,7 +1641,7 @@ namespace ChaosRL.Tests
         [Test]
         public void Max_3DTensor_AlongMiddleDimension()
         {
-            // Shape [2, 3, 2]: 2 matrices of 3×2
+            // Shape [2, 3, 2]: 2 matrices of 3x2
             var a = new Tensor( new[] { 2, 3, 2 } );
             for (int i = 0; i < 12; i++)
                 a.Data[ i ] = i + 1;
@@ -2068,12 +2068,12 @@ namespace ChaosRL.Tests
             Assert.That( b.Shape, Is.EqualTo( new[] { 6 } ) );
             Assert.That( b.Size, Is.EqualTo( 6 ) );
             var reshapedData = new float[ b.Size ];
-            b.DataStorage.CopyTo( reshapedData );
+            b.Data.CopyTo( reshapedData );
             Assert.That( reshapedData, Is.EqualTo( new[] { 1f, 2f, 3f, 4f, 5f, 6f } ) );
 
             // Verify storage is shared (view op)
-            Assert.That( ReferenceEquals( a.DataStorage, b.DataStorage ) );
-            Assert.That( ReferenceEquals( a.GradStorage, b.GradStorage ) );
+            Assert.That( ReferenceEquals( a.Data, b.Data ) );
+            Assert.That( ReferenceEquals( a.Grad, b.Grad ) );
         }
         //------------------------------------------------------------------
         [Test]
@@ -2572,7 +2572,7 @@ namespace ChaosRL.Tests
         [Test]
         public void Indexer_3DTensor_GetAndSet()
         {
-            // 2×2×3 tensor
+            // 2x2x3 tensor
             var a = new Tensor( new[] { 2, 2, 3 } );
             for (int i = 0; i < 12; i++)
                 a.Data[ i ] = i + 1;
@@ -2594,7 +2594,7 @@ namespace ChaosRL.Tests
         [Test]
         public void Indexer_4DTensor_GetAndSet()
         {
-            // 2×2×2×2 tensor
+            // 2x2x2x2 tensor
             var a = new Tensor( new[] { 2, 2, 2, 2 } );
             for (int i = 0; i < 16; i++)
                 a.Data[ i ] = i;

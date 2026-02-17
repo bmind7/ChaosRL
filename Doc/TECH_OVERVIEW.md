@@ -31,7 +31,7 @@ The focus is runtime C# systems (autodiff, NN, PPO, and compute backends), not s
 
 ## Backend and Memory Model
 ### Tensor storage ownership
-- `Tensor` stores data/grad in `TensorStorage` objects (`DataStorage`, `GradStorage`).
+- `Tensor` stores data/grad in `TensorStorage` objects (`Data`, `Grad`).
 - `TensorStorage` wraps `NativeArray<float>` with ref-counting (`AddRef`, `Release`).
 - View ops (`Reshape`, `Squeeze`, `Unsqueeze`) share storage and increment ref-counts.
 - Final release disposes persistent native memory.

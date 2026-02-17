@@ -42,8 +42,8 @@ namespace ChaosRL
 
             var result = new Tensor( resultShape, requiresGrad: false, device: source.Device );
 
-            // Gather rows via backend — device-agnostic
-            source.Backend.Gather( source.DataStorage, result.DataStorage, indices, start, mbSize, featureSize );
+            // Gather rows via backend - device-agnostic
+            source.Backend.Gather( source.Data, result.Data, indices, start, mbSize, featureSize );
 
             return result;
         }

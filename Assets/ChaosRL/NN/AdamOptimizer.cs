@@ -76,7 +76,7 @@ namespace ChaosRL
 
                 var backend = parameter.Backend;
                 backend.AdamStep(
-                    parameter.DataStorage, parameter.GradStorage, _m, _v,
+                    parameter.Data, parameter.Grad, _m, _v,
                     parameter.Size, offset,
                     learningRate, _beta1, _beta2, _epsilon,
                     invBias1, invBias2 );
