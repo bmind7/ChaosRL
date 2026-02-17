@@ -122,7 +122,7 @@ namespace ChaosRL
                 _actionBuffer[ _bufferIdx, agentIdx, i ] = action[ 0, i ];
             }
 
-            _logProbBuffer[ _bufferIdx, agentIdx ] = dist.LogProb( action ).Sum().Data[ 0 ];
+            _logProbBuffer[ _bufferIdx, agentIdx ] = dist.LogProb( action ).Sum().Scalar;
 
             for (int i = 0; i < _inputSize; i++)
                 _observationBuffer[ _bufferIdx, agentIdx, i ] = observation[ i ];
@@ -247,14 +247,14 @@ namespace ChaosRL
                     var l2Penalty = _l2Regularizer.Compute( _l2Coef );
 
                     // Accumulate loss statistics
-                    totalPgLossSum += totalPgLoss.Data[ 0 ];
-                    totalEntropyLossSum += totalEntropyLoss.Data[ 0 ];
-                    totalValueLossSum += totalValueLoss.Data[ 0 ];
+                    totalPgLossSum += totalPgLoss.Scalar;
+                    totalEntropyLossSum += totalEntropyLoss.Scalar;
+                    totalValueLossSum += totalValueLoss.Scalar;
                     batchCount++;
 
                     // Standard PPO loss: policy term + value term + entropy bonus + weight decay
                     var totalLoss = totalPgLoss - _betaCoef * totalEntropyLoss + _vCoef * totalValueLoss + l2Penalty;
-                    averageLoss += totalLoss.Data[ 0 ];
+                    averageLoss += totalLoss.Scalar;
 
                     _policyNetwork.ZeroGrad();
                     _valueNetwork.ZeroGrad();
@@ -269,7 +269,7 @@ namespace ChaosRL
             float meanEntropyLoss = totalEntropyLossSum / batchCount;
             float meanValueLoss = totalValueLossSum / batchCount;
 
-            float meanReturn = batch_returns.Sum().Data[ 0 ] / batch_doneFlags.Sum().Data[ 0 ] / _numEnvs;
+            float meanReturn = batch_returns.Sum().Scalar / batch_doneFlags.Sum().Scalar / _numEnvs;
             Debug.Log( $"Step count: {_currentStep}, Mean Return: {meanReturn}, Average Loss: {averageLoss}, PG Loss: {meanPgLoss}, Entropy Loss: {meanEntropyLoss}, Value Loss: {meanValueLoss}" );
         }
         //------------------------------------------------------------------

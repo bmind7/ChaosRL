@@ -4,7 +4,7 @@ using System;
 
 namespace ChaosRL.Tests
 {
-    public class L2RegularizerTests
+    public class L2RegularizerTests : TensorScopedTestBase
     {
         //------------------------------------------------------------------
         [Test]
