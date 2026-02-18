@@ -19,6 +19,9 @@ namespace ChaosRL
             // Note: StdDev should be > 0. Consider parameterizing via a positive transform if needed.
             if (!ShapesMatch( mean.Shape, std.Shape ))
                 throw new ArgumentException( "Mean and StdDev must have matching shapes" );
+            if (mean.Device != std.Device)
+                throw new ArgumentException(
+                    $"Mean and StdDev must be on the same device. Mean is on {mean.Device}, StdDev is on {std.Device}." );
 
             Mean = mean;
             StdDev = std;
@@ -39,6 +42,11 @@ namespace ChaosRL
             }
 
             var zTensor = new Tensor( Mean.Shape, z );
+
+            // If the distribution's parameters live on GPU, move noise there
+            if (Mean.Device == TensorDevice.GPU)
+                zTensor = zTensor.ToGpu();
+
             return Mean + StdDev * zTensor; // reparameterization: x = mean + std * z
         }
         //------------------------------------------------------------------

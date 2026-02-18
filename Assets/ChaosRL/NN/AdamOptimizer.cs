@@ -36,6 +36,16 @@ namespace ChaosRL
             _parameters = collected.ToArray();
             _parameterOffsets = new int[ _parameters.Length ];
 
+            // Validate all parameters live on the same device
+            var device = _parameters[ 0 ].Device;
+            for (int i = 1; i < _parameters.Length; i++)
+            {
+                if (_parameters[ i ].Device != device)
+                    throw new ArgumentException(
+                        $"All parameters must be on the same device. Parameter 0 is on {device}, " +
+                        $"but parameter {i} is on {_parameters[ i ].Device}." );
+            }
+
             // Calculate total size and offsets
             int totalSize = 0;
             for (int i = 0; i < _parameters.Length; i++)
@@ -44,8 +54,8 @@ namespace ChaosRL
                 totalSize += _parameters[ i ].Size;
             }
 
-            _m = TensorStorage.Allocate( totalSize );
-            _v = TensorStorage.Allocate( totalSize );
+            _m = TensorStorage.Allocate( totalSize, _parameters[ 0 ].Device );
+            _v = TensorStorage.Allocate( totalSize, _parameters[ 0 ].Device );
 
             _beta1 = beta1;
             _beta2 = beta2;

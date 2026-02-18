@@ -560,7 +560,11 @@ namespace ChaosRL
     //==================================================================
 
     //------------------------------------------------------------------
-    /// <summary>result[i] = pow( input[i], exponent )</summary>
+    /// <summary>result[i] = pow( abs( input[i] ), exponent ) * sign( input[i] )</summary>
+    /// <remarks>
+    /// Uses abs/sign to handle negative bases with fractional exponents consistently
+    /// across CPU and GPU backends.
+    /// </remarks>
     [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
                    DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct ElementPowJob : IJobParallelFor
@@ -571,7 +575,8 @@ namespace ChaosRL
 
         public void Execute( int i )
         {
-            Result[ i ] = math.pow( Input[ i ], Exponent );
+            float x = Input[ i ];
+            Result[ i ] = math.pow( math.abs( x ), Exponent ) * math.sign( x );
         }
     }
     //------------------------------------------------------------------
@@ -651,7 +656,10 @@ namespace ChaosRL
     //==================================================================
 
     //------------------------------------------------------------------
-    /// <summary>Backward for Pow: grad += exponent * pow(data, exponent-1) * resultGrad</summary>
+    /// <summary>Backward for Pow: grad += exponent * pow(abs(data), exponent-1) * sign(data) * resultGrad</summary>
+    /// <remarks>
+    /// Uses abs/sign to match the forward pass and stay consistent with the GPU backend.
+    /// </remarks>
     [BurstCompile( FloatMode = FloatMode.Fast, FloatPrecision = FloatPrecision.Low,
                    DisableSafetyChecks = true, OptimizeFor = OptimizeFor.Performance )]
     public struct PowBackwardJob : IJobParallelFor
@@ -663,7 +671,8 @@ namespace ChaosRL
 
         public void Execute( int i )
         {
-            InputGrad[ i ] += Exponent * math.pow( InputData[ i ], Exponent - 1f ) * ResultGrad[ i ];
+            float x = InputData[ i ];
+            InputGrad[ i ] += Exponent * math.pow( math.abs( x ), Exponent - 1f ) * math.sign( x ) * ResultGrad[ i ];
         }
     }
     //------------------------------------------------------------------

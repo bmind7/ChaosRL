@@ -1,0 +1,759 @@
+// ============================================================
+//  ChaosRL — Tensor Operations Compute Shader
+//  All GPU kernels for ITensorBackend in a single file.
+// ============================================================
+
+#define THREADS 256
+#define TILE    16
+
+// ============================================================
+//  Uniforms (set from GpuBackend before each dispatch)
+// ============================================================
+
+uint _Size;
+uint _SizeA;
+uint _SizeB;
+uint _ResultSize;
+float _Exponent;
+float _MinVal;
+float _MaxVal;
+float _AGradScale;
+float _BGradScale;
+
+// MatMul / Transpose dimensions
+uint _M;
+uint _K;
+uint _N;
+uint _Accumulate;
+
+// Reduction dimension decomposition
+uint _OuterSize;
+uint _DimSize;
+uint _InnerSize;
+
+// Slice / Copy
+uint _SrcBlockSize;
+uint _DstBlockSize;
+uint _StartOffset;
+uint _SrcOffset;
+uint _DstOffset;
+uint _Count;
+
+// ExpandLast / Gather
+uint _Num;
+uint _FeatureSize;
+
+// Adam optimizer
+uint _MomentOffset;
+float _LR;
+float _Beta1;
+float _Beta2;
+float _Epsilon;
+float _InvBias1;
+float _InvBias2;
+
+// Fill
+float _FillValue;
+
+// ============================================================
+//  Buffer declarations
+// ============================================================
+
+// --- Forward binary / unary ---
+StructuredBuffer<float>   _A;
+StructuredBuffer<float>   _B;
+RWStructuredBuffer<float> _Result;
+
+// --- Unary input ---
+StructuredBuffer<float>   _Input;
+
+// --- Backward binary (uint for CAS-based atomic float add) ---
+StructuredBuffer<float>   _AData;
+StructuredBuffer<float>   _BData;
+RWStructuredBuffer<uint>  _AGrad;
+RWStructuredBuffer<uint>  _BGrad;
+StructuredBuffer<float>   _ResultGrad;
+
+// --- Backward unary ---
+StructuredBuffer<float>   _InputData;
+StructuredBuffer<float>   _ResultData;
+RWStructuredBuffer<float> _InputGrad;
+
+// --- Reduction output ---
+RWStructuredBuffer<float> _Output;
+RWStructuredBuffer<uint>  _MaxIdxBuf;
+
+// --- Data movement ---
+StructuredBuffer<float>   _Src;
+RWStructuredBuffer<float> _Dst;
+
+// --- Gather ---
+StructuredBuffer<uint>    _Indices;
+
+// --- Adam ---
+RWStructuredBuffer<float> _Data;
+StructuredBuffer<float>   _Grad;
+RWStructuredBuffer<float> _MBuf;
+RWStructuredBuffer<float> _VBuf;
+
+// ============================================================
+//  Float atomic add via CAS loop (for broadcast backward)
+// ============================================================
+
+void FloatAtomicAdd( RWStructuredBuffer<uint> buf, uint idx, float val )
+{
+    uint expected;
+    uint original;
+    [allow_uav_condition]
+    do
+    {
+        expected = buf[ idx ];
+        uint desired = asuint( asfloat( expected ) + val );
+        InterlockedCompareExchange( buf[ idx ], expected, desired, original );
+    }
+    while ( original != expected );
+}
+
+// ============================================================
+//  Element-wise binary — forward
+// ============================================================
+
+#pragma kernel ElementAdd
+[numthreads( THREADS, 1, 1 )]
+void ElementAdd( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    _Result[ i ] = _A[ i % _SizeA ] + _B[ i % _SizeB ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel ElementMul
+[numthreads( THREADS, 1, 1 )]
+void ElementMul( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    _Result[ i ] = _A[ i % _SizeA ] * _B[ i % _SizeB ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel ElementDiv
+[numthreads( THREADS, 1, 1 )]
+void ElementDiv( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    _Result[ i ] = _A[ i % _SizeA ] / _B[ i % _SizeB ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel ElementMax
+[numthreads( THREADS, 1, 1 )]
+void ElementMax( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float a = _A[ i % _SizeA ];
+    float b = _B[ i % _SizeB ];
+    _Result[ i ] = ( a >= b ) ? a : b;
+}
+
+//------------------------------------------------------------------
+#pragma kernel ElementMin
+[numthreads( THREADS, 1, 1 )]
+void ElementMin( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float a = _A[ i % _SizeA ];
+    float b = _B[ i % _SizeB ];
+    _Result[ i ] = ( a <= b ) ? a : b;
+}
+
+// ============================================================
+//  Element-wise binary — backward  (atomic float add)
+// ============================================================
+
+#pragma kernel AddBackward
+[numthreads( THREADS, 1, 1 )]
+void AddBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float rg = _ResultGrad[ i ];
+    if ( _AGradScale != 0.0 )
+        FloatAtomicAdd( _AGrad, i % _SizeA, _AGradScale * rg );
+    if ( _BGradScale != 0.0 )
+        FloatAtomicAdd( _BGrad, i % _SizeB, _BGradScale * rg );
+}
+
+//------------------------------------------------------------------
+#pragma kernel MulBackward
+[numthreads( THREADS, 1, 1 )]
+void MulBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float rg = _ResultGrad[ i ];
+    float ad = _AData[ i % _SizeA ];
+    float bd = _BData[ i % _SizeB ];
+    if ( _AGradScale != 0.0 )
+        FloatAtomicAdd( _AGrad, i % _SizeA, _AGradScale * bd * rg );
+    if ( _BGradScale != 0.0 )
+        FloatAtomicAdd( _BGrad, i % _SizeB, _BGradScale * ad * rg );
+}
+
+//------------------------------------------------------------------
+#pragma kernel DivBackward
+[numthreads( THREADS, 1, 1 )]
+void DivBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float rg = _ResultGrad[ i ];
+    float ad = _AData[ i % _SizeA ];
+    float bd = _BData[ i % _SizeB ];
+    if ( _AGradScale != 0.0 )
+        FloatAtomicAdd( _AGrad, i % _SizeA, _AGradScale * rg / bd );
+    if ( _BGradScale != 0.0 )
+        FloatAtomicAdd( _BGrad, i % _SizeB, _BGradScale * ( -ad / ( bd * bd ) ) * rg );
+}
+
+//------------------------------------------------------------------
+#pragma kernel ElementMaxBackward
+[numthreads( THREADS, 1, 1 )]
+void ElementMaxBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float rg = _ResultGrad[ i ];
+    float ad = _AData[ i % _SizeA ];
+    float bd = _BData[ i % _SizeB ];
+    if ( ad >= bd )
+    {
+        if ( _AGradScale != 0.0 )
+            FloatAtomicAdd( _AGrad, i % _SizeA, _AGradScale * rg );
+    }
+    else
+    {
+        if ( _BGradScale != 0.0 )
+            FloatAtomicAdd( _BGrad, i % _SizeB, _BGradScale * rg );
+    }
+}
+
+//------------------------------------------------------------------
+#pragma kernel ElementMinBackward
+[numthreads( THREADS, 1, 1 )]
+void ElementMinBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _ResultSize ) return;
+    float rg = _ResultGrad[ i ];
+    float ad = _AData[ i % _SizeA ];
+    float bd = _BData[ i % _SizeB ];
+    if ( ad <= bd )
+    {
+        if ( _AGradScale != 0.0 )
+            FloatAtomicAdd( _AGrad, i % _SizeA, _AGradScale * rg );
+    }
+    else
+    {
+        if ( _BGradScale != 0.0 )
+            FloatAtomicAdd( _BGrad, i % _SizeB, _BGradScale * rg );
+    }
+}
+
+// ============================================================
+//  Element-wise unary — forward
+// ============================================================
+
+#pragma kernel Pow
+[numthreads( THREADS, 1, 1 )]
+void Pow( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = pow( abs( _Input[ i ] ), _Exponent ) * sign( _Input[ i ] );
+}
+
+//------------------------------------------------------------------
+#pragma kernel Exp
+[numthreads( THREADS, 1, 1 )]
+void Exp( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = exp( _Input[ i ] );
+}
+
+//------------------------------------------------------------------
+#pragma kernel Log
+[numthreads( THREADS, 1, 1 )]
+void Log( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = log( _Input[ i ] );
+}
+
+//------------------------------------------------------------------
+#pragma kernel ReLU
+[numthreads( THREADS, 1, 1 )]
+void ReLU( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    float v = _Input[ i ];
+    _Result[ i ] = ( v > 0.0 ) ? v : 0.0;
+}
+
+//------------------------------------------------------------------
+#pragma kernel Tanh
+[numthreads( THREADS, 1, 1 )]
+void Tanh( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = tanh( _Input[ i ] );
+}
+
+//------------------------------------------------------------------
+#pragma kernel Clamp
+[numthreads( THREADS, 1, 1 )]
+void Clamp( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = clamp( _Input[ i ], _MinVal, _MaxVal );
+}
+
+// ============================================================
+//  Element-wise unary — backward
+// ============================================================
+
+#pragma kernel PowBackward
+[numthreads( THREADS, 1, 1 )]
+void PowBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    float x = _InputData[ i ];
+    float rg = _ResultGrad[ i ];
+    _InputGrad[ i ] += _Exponent * pow( abs( x ), _Exponent - 1.0 ) * sign( x ) * rg;
+}
+
+//------------------------------------------------------------------
+#pragma kernel ExpBackward
+[numthreads( THREADS, 1, 1 )]
+void ExpBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _InputGrad[ i ] += _ResultData[ i ] * _ResultGrad[ i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel LogBackward
+[numthreads( THREADS, 1, 1 )]
+void LogBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _InputGrad[ i ] += _ResultGrad[ i ] / _InputData[ i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel ReLUBackward
+[numthreads( THREADS, 1, 1 )]
+void ReLUBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _InputGrad[ i ] += ( _InputData[ i ] > 0.0 ? 1.0 : 0.0 ) * _ResultGrad[ i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel TanhBackward
+[numthreads( THREADS, 1, 1 )]
+void TanhBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    float t = _ResultData[ i ];
+    _InputGrad[ i ] += ( 1.0 - t * t ) * _ResultGrad[ i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel ClampBackward
+[numthreads( THREADS, 1, 1 )]
+void ClampBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    float x = _InputData[ i ];
+    _InputGrad[ i ] += ( x >= _MinVal && x <= _MaxVal ? 1.0 : 0.0 ) * _ResultGrad[ i ];
+}
+
+// ============================================================
+//  Reductions
+// ============================================================
+
+groupshared float _sharedF[ THREADS ];
+groupshared uint  _sharedU[ THREADS ];
+
+//------------------------------------------------------------------
+#pragma kernel SumReduce
+[numthreads( THREADS, 1, 1 )]
+void SumReduce( uint3 dtid : SV_DispatchThreadID,
+                uint3 gtid : SV_GroupThreadID,
+                uint3 gid  : SV_GroupID )
+{
+    uint tid = gtid.x;
+    _sharedF[ tid ] = ( dtid.x < _Size ) ? _Input[ dtid.x ] : 0.0;
+    GroupMemoryBarrierWithGroupSync();
+
+    for ( uint s = THREADS / 2; s > 0; s >>= 1 )
+    {
+        if ( tid < s )
+            _sharedF[ tid ] += _sharedF[ tid + s ];
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if ( tid == 0 )
+        _Output[ gid.x ] = _sharedF[ 0 ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel SumBackward
+[numthreads( THREADS, 1, 1 )]
+void SumBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    // _Output[0] holds the upstream scalar gradient; broadcast to all input grad slots
+    _InputGrad[ i ] += _Output[ 0 ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel SumDim
+[numthreads( THREADS, 1, 1 )]
+void SumDim( uint3 id : SV_DispatchThreadID )
+{
+    // Each thread handles one (outer, inner) pair
+    uint oi = id.x;
+    if ( oi >= _OuterSize * _InnerSize ) return;
+
+    uint outer = oi / _InnerSize;
+    uint inner = oi % _InnerSize;
+
+    float acc = 0.0;
+    uint base_idx = outer * _DimSize * _InnerSize + inner;
+    for ( uint d = 0; d < _DimSize; d++ )
+        acc += _Input[ base_idx + d * _InnerSize ];
+
+    _Output[ oi ] = acc;
+}
+
+//------------------------------------------------------------------
+#pragma kernel SumDimBackward
+[numthreads( THREADS, 1, 1 )]
+void SumDimBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint oi = id.x;
+    if ( oi >= _OuterSize * _InnerSize ) return;
+
+    uint outer = oi / _InnerSize;
+    uint inner = oi % _InnerSize;
+
+    float g = _ResultGrad[ oi ];
+    uint base_idx = outer * _DimSize * _InnerSize + inner;
+    for ( uint d = 0; d < _DimSize; d++ )
+        _InputGrad[ base_idx + d * _InnerSize ] += g;
+}
+
+//------------------------------------------------------------------
+#pragma kernel MaxReduce
+[numthreads( THREADS, 1, 1 )]
+void MaxReduce( uint3 dtid : SV_DispatchThreadID,
+                uint3 gtid : SV_GroupThreadID,
+                uint3 gid  : SV_GroupID )
+{
+    uint tid = gtid.x;
+    if ( dtid.x < _Size )
+    {
+        _sharedF[ tid ] = _Input[ dtid.x ];
+        _sharedU[ tid ] = dtid.x;
+    }
+    else
+    {
+        _sharedF[ tid ] = -3.402823e+38;
+        _sharedU[ tid ] = 0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    for ( uint s = THREADS / 2; s > 0; s >>= 1 )
+    {
+        if ( tid < s && _sharedF[ tid + s ] > _sharedF[ tid ] )
+        {
+            _sharedF[ tid ] = _sharedF[ tid + s ];
+            _sharedU[ tid ] = _sharedU[ tid + s ];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if ( tid == 0 )
+    {
+        _Output[ gid.x ]     = _sharedF[ 0 ];
+        _MaxIdxBuf[ gid.x ]  = _sharedU[ 0 ];
+    }
+}
+
+//------------------------------------------------------------------
+#pragma kernel MaxReduceBackward
+[numthreads( 1, 1, 1 )]
+void MaxReduceBackward( uint3 id : SV_DispatchThreadID )
+{
+    // Single-element: gradient flows only to the max position
+    uint idx = _MaxIdxBuf[ 0 ];
+    _InputGrad[ idx ] += _Output[ 0 ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel MaxReduceDim
+[numthreads( THREADS, 1, 1 )]
+void MaxReduceDim( uint3 id : SV_DispatchThreadID )
+{
+    uint oi = id.x;
+    if ( oi >= _OuterSize * _InnerSize ) return;
+
+    uint outer = oi / _InnerSize;
+    uint inner = oi % _InnerSize;
+
+    uint blockSize = _DimSize * _InnerSize;
+    uint base_idx = outer * blockSize + inner;
+
+    float maxVal = -3.402823e+38;
+    uint  maxI   = 0;
+    for ( uint d = 0; d < _DimSize; d++ )
+    {
+        uint idx = base_idx + d * _InnerSize;
+        float v = _Input[ idx ];
+        if ( v > maxVal )
+        {
+            maxVal = v;
+            maxI   = idx;
+        }
+    }
+
+    _Output[ oi ]     = maxVal;
+    _MaxIdxBuf[ oi ]  = maxI;
+}
+
+//------------------------------------------------------------------
+#pragma kernel MaxReduceDimBackward
+[numthreads( THREADS, 1, 1 )]
+void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    uint srcIdx = _MaxIdxBuf[ i ];
+    _InputGrad[ srcIdx ] += _ResultGrad[ i ];
+}
+
+// ============================================================
+//  MatMul
+// ============================================================
+
+groupshared float _tileA[ TILE ][ TILE ];
+groupshared float _tileB[ TILE ][ TILE ];
+
+#pragma kernel MatMulForward
+[numthreads( TILE, TILE, 1 )]
+void MatMulForward( uint3 dtid : SV_DispatchThreadID,
+                    uint3 gtid : SV_GroupThreadID )
+{
+    uint row = dtid.y;
+    uint col = dtid.x;
+    float sum = 0.0;
+
+    uint numTiles = ( _K + TILE - 1 ) / TILE;
+    for ( uint t = 0; t < numTiles; t++ )
+    {
+        uint aCol = t * TILE + gtid.x;
+        uint bRow = t * TILE + gtid.y;
+
+        _tileA[ gtid.y ][ gtid.x ] = ( row < _M && aCol < _K ) ? _A[ row * _K + aCol ] : 0.0;
+        _tileB[ gtid.y ][ gtid.x ] = ( bRow < _K && col  < _N ) ? _B[ bRow * _N + col ] : 0.0;
+
+        GroupMemoryBarrierWithGroupSync();
+
+        for ( uint k = 0; k < TILE; k++ )
+            sum += _tileA[ gtid.y ][ k ] * _tileB[ k ][ gtid.x ];
+
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    if ( row < _M && col < _N )
+    {
+        uint idx = row * _N + col;
+        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + sum : sum;
+    }
+}
+
+//------------------------------------------------------------------
+#pragma kernel Transpose
+[numthreads( THREADS, 1, 1 )]
+void Transpose( uint3 id : SV_DispatchThreadID )
+{
+    // Transpose _M x _N matrix: _Input[row * _N + col] -> _Result[col * _M + row]
+    uint idx = id.x;
+    if ( idx >= _Size ) return;
+    uint row = idx / _N;
+    uint col = idx % _N;
+    _Result[ col * _M + row ] = _Input[ idx ];
+}
+
+// ============================================================
+//  Data movement
+// ============================================================
+
+#pragma kernel Copy
+[numthreads( THREADS, 1, 1 )]
+void Copy( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Count ) return;
+    _Dst[ _DstOffset + i ] = _Src[ _SrcOffset + i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel SliceCopy
+[numthreads( THREADS, 1, 1 )]
+void SliceCopy( uint3 id : SV_DispatchThreadID )
+{
+    uint outer = id.x;
+    if ( outer >= _OuterSize ) return;
+
+    uint srcBase = outer * _SrcBlockSize + _StartOffset;
+    uint dstBase = outer * _DstBlockSize;
+
+    for ( uint i = 0; i < _InnerSize; i++ )
+        _Dst[ dstBase + i ] = _Src[ srcBase + i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel SliceCopyBackward
+[numthreads( THREADS, 1, 1 )]
+void SliceCopyBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint outer = id.x;
+    if ( outer >= _OuterSize ) return;
+
+    uint srcBase = outer * _SrcBlockSize + _StartOffset;
+    uint dstBase = outer * _DstBlockSize;
+
+    for ( uint i = 0; i < _InnerSize; i++ )
+        _Dst[ srcBase + i ] += _Src[ dstBase + i ];
+}
+
+//------------------------------------------------------------------
+#pragma kernel ExpandLast
+[numthreads( THREADS, 1, 1 )]
+void ExpandLast( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    float v = _Input[ i ];
+    uint base_dst = i * _Num;
+    for ( uint n = 0; n < _Num; n++ )
+        _Result[ base_dst + n ] = v;
+}
+
+//------------------------------------------------------------------
+#pragma kernel ExpandLastBackward
+[numthreads( THREADS, 1, 1 )]
+void ExpandLastBackward( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    float acc = 0.0;
+    uint base_src = i * _Num;
+    for ( uint n = 0; n < _Num; n++ )
+        acc += _ResultGrad[ base_src + n ];
+    _InputGrad[ i ] += acc;
+}
+
+//------------------------------------------------------------------
+#pragma kernel Gather
+[numthreads( THREADS, 1, 1 )]
+void Gather( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Count ) return;
+
+    uint srcRow = _Indices[ i ];
+    uint srcStart = srcRow * _FeatureSize;
+    uint dstStart = i * _FeatureSize;
+    for ( uint f = 0; f < _FeatureSize; f++ )
+        _Dst[ dstStart + f ] = _Src[ srcStart + f ];
+}
+
+// ============================================================
+//  Utility
+// ============================================================
+
+#pragma kernel ZeroFill
+[numthreads( THREADS, 1, 1 )]
+void ZeroFill( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = 0.0;
+}
+
+//------------------------------------------------------------------
+#pragma kernel OneFill
+[numthreads( THREADS, 1, 1 )]
+void OneFill( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = 1.0;
+}
+
+//------------------------------------------------------------------
+#pragma kernel ValueFill
+[numthreads( THREADS, 1, 1 )]
+void ValueFill( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+    _Result[ i ] = _FillValue;
+}
+
+// ============================================================
+//  Adam optimizer
+// ============================================================
+
+#pragma kernel AdamStep
+[numthreads( THREADS, 1, 1 )]
+void AdamStep( uint3 id : SV_DispatchThreadID )
+{
+    uint i = id.x;
+    if ( i >= _Size ) return;
+
+    uint mi = _MomentOffset + i;
+    float g = _Grad[ i ];
+
+    float m = _Beta1 * _MBuf[ mi ] + ( 1.0 - _Beta1 ) * g;
+    float v = _Beta2 * _VBuf[ mi ] + ( 1.0 - _Beta2 ) * g * g;
+
+    _MBuf[ mi ] = m;
+    _VBuf[ mi ] = v;
+
+    float mHat = m * _InvBias1;
+    float vHat = v * _InvBias2;
+
+    _Data[ i ] -= _LR * mHat / ( sqrt( vHat ) + _Epsilon );
+}

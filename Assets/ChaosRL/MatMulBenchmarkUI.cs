@@ -33,6 +33,15 @@ namespace ChaosRL
                     StartCoroutine( RunBenchmarks() );
                 }
             }
+            if (GUILayout.Button( "Run GPU Benchmark", GUILayout.Width( 180 ), GUILayout.Height( 40 ) ))
+            {
+                if (!_isRunning)
+                {
+                    _isRunning = true;
+                    _benchmarkResults = "Running GPU benchmarks... (UI will update progressively)\n";
+                    StartCoroutine( RunGpuBenchmarks() );
+                }
+            }
             if (GUILayout.Button( "Run Kernel Comparison", GUILayout.Width( 200 ), GUILayout.Height( 40 ) ))
             {
                 if (!_isRunning)
@@ -111,8 +120,77 @@ namespace ChaosRL
             _isRunning = false;
         }
         //------------------------------------------------------------------
+        private IEnumerator RunGpuBenchmarks()
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine( $"GPU Benchmark started at {DateTime.Now}" );
+            sb.AppendLine();
+
+            if (!SystemInfo.supportsComputeShaders)
+            {
+                sb.AppendLine( "Compute shaders are not supported on this platform." );
+                _benchmarkResults = sb.ToString();
+                _isRunning = false;
+                yield break;
+            }
+
+            if (Tensor.GpuBackend == null)
+                Tensor.GpuBackend = new GpuBackend();
+
+            var shapes = new (int M, int K, int N)[]
+            {
+                (64, 64, 64),
+                (128, 128, 128),
+                (256, 256, 256),
+                (512, 512, 512),
+                (768, 768, 768),
+                (1024, 1024, 1024),
+                (1536, 1536, 1536),
+                (1024, 2048, 1024),
+                (2048, 1024, 2048),
+                (2048, 2048, 2048),
+            };
+
+            sb.AppendLine( "GPU Results (MatMul Only):" );
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
+            sb.AppendLine( new string( '-', 80 ) );
+            _benchmarkResults = sb.ToString();
+            yield return null;
+
+            foreach (var shape in shapes)
+            {
+                RunTensorMatMulOnlyGpu( shape.M, shape.K, shape.N, sb );
+                _benchmarkResults = sb.ToString();
+                yield return null;
+            }
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine();
+
+            sb.AppendLine( "GPU Results (MatMul + Backward):" );
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
+            sb.AppendLine( new string( '-', 80 ) );
+            _benchmarkResults = sb.ToString();
+            yield return null;
+
+            foreach (var shape in shapes)
+            {
+                RunTensorMatMulWithBackwardGpu( shape.M, shape.K, shape.N, sb );
+                _benchmarkResults = sb.ToString();
+                yield return null;
+            }
+            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( "Done." );
+
+            _benchmarkResults = sb.ToString();
+            _isRunning = false;
+        }
+        //------------------------------------------------------------------
         private void RunTensorMatMulOnly( int M, int K, int N, StringBuilder sb )
         {
+            using var scope = new TensorScope();
+
             const int warmup = 3;
             const int iterations = 10;
 
@@ -155,8 +233,60 @@ namespace ChaosRL
             sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
         }
         //------------------------------------------------------------------
+        private void RunTensorMatMulOnlyGpu( int M, int K, int N, StringBuilder sb )
+        {
+            using var scope = new TensorScope();
+
+            const int warmup = 3;
+            const int iterations = 10;
+
+            var aArr = new float[ M * K ];
+            var bArr = new float[ K * N ];
+            for (int j = 0; j < aArr.Length; j++)
+                aArr[ j ] = j * 0.01f;
+            for (int j = 0; j < bArr.Length; j++)
+                bArr[ j ] = j * 0.01f;
+
+            var a = new Tensor( new[] { M, K }, device: TensorDevice.GPU );
+            var b = new Tensor( new[] { K, N }, device: TensorDevice.GPU );
+            a.Data.CopyFrom( aArr );
+            b.Data.CopyFrom( bArr );
+
+            for (int i = 0; i < warmup; i++)
+            {
+                var r = a.MatMul( b );
+                GpuSync( r );
+            }
+
+            double[] times = new double[ iterations ];
+            for (int i = 0; i < iterations; i++)
+            {
+                var sw = Stopwatch.StartNew();
+                var r = a.MatMul( b );
+                GpuSync( r );
+                sw.Stop();
+                times[ i ] = sw.Elapsed.TotalMilliseconds;
+            }
+
+            double avgTime = 0;
+            foreach (var t in times) avgTime += t;
+            avgTime /= iterations;
+
+            double sumSquares = 0;
+            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
+            double stdDev = Math.Sqrt( sumSquares / iterations );
+
+            var flops = 2.0 * M * K * N;
+            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
+
+            string sizeStr = $"{M}x{K} @ {K}x{N}";
+            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+        }
+        //------------------------------------------------------------------
         private void RunTensorMatMulWithBackward( int M, int K, int N, StringBuilder sb )
         {
+            using var scope = new TensorScope();
+
             const int warmup = 3;
             const int iterations = 10;
 
@@ -206,6 +336,73 @@ namespace ChaosRL
 
             string sizeStr = $"{M}x{K} @ {K}x{N}";
             sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+        }
+        //------------------------------------------------------------------
+        private void RunTensorMatMulWithBackwardGpu( int M, int K, int N, StringBuilder sb )
+        {
+            using var scope = new TensorScope();
+
+            const int warmup = 3;
+            const int iterations = 10;
+
+            var aArr = new float[ M * K ];
+            var bArr = new float[ K * N ];
+            for (int j = 0; j < aArr.Length; j++)
+                aArr[ j ] = j * 0.01f;
+            for (int j = 0; j < bArr.Length; j++)
+                bArr[ j ] = j * 0.01f;
+
+            var a = new Tensor( new[] { M, K }, device: TensorDevice.GPU );
+            var b = new Tensor( new[] { K, N }, device: TensorDevice.GPU );
+            a.Data.CopyFrom( aArr );
+            b.Data.CopyFrom( bArr );
+
+            for (int i = 0; i < warmup; i++)
+            {
+                var result = a.MatMul( b );
+                var loss = result.Sum();
+                loss.Backward();
+                a.ZeroGrad();
+                b.ZeroGrad();
+                GpuSync( loss );
+            }
+
+            double[] times = new double[ iterations ];
+            for (int i = 0; i < iterations; i++)
+            {
+                var sw = Stopwatch.StartNew();
+                var result = a.MatMul( b );
+                var loss = result.Sum();
+                loss.Backward();
+                a.ZeroGrad();
+                b.ZeroGrad();
+                GpuSync( loss );
+                sw.Stop();
+                times[ i ] = sw.Elapsed.TotalMilliseconds;
+            }
+
+            double avgTime = 0;
+            foreach (var t in times) avgTime += t;
+            avgTime /= iterations;
+
+            double sumSquares = 0;
+            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
+            double stdDev = Math.Sqrt( sumSquares / iterations );
+
+            var flops = 6.0 * M * K * N;
+            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
+
+            string sizeStr = $"{M}x{K} @ {K}x{N}";
+            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Forces a GPU pipeline flush by reading back a single float from the tensor.
+        /// This ensures all dispatched compute work has completed before continuing.
+        /// </summary>
+        private static void GpuSync( Tensor t )
+        {
+            _ = t.Data[ 0 ];
         }
         //------------------------------------------------------------------
         private static int ComputeBatchSize( int totalWorkItems )

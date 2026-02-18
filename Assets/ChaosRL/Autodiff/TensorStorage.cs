@@ -4,6 +4,8 @@ using System.Threading;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 
+using UnityEngine;
+
 namespace ChaosRL
 {
     /// <summary>
@@ -15,26 +17,35 @@ namespace ChaosRL
     {
         //------------------------------------------------------------------
         /// <summary>
-        /// Raw backing buffer. Internal so only the ChaosRL assembly (CpuBackend, CpuMatMulOps,
+        /// Raw CPU backing buffer. Internal so only the ChaosRL assembly (CpuBackend, CpuMatMulOps,
         /// TensorJobs) can access the <see cref="NativeArray{T}"/> directly. External code
         /// should use the element indexer <c>this[int]</c> or <see cref="CopyFrom"/>/<see cref="CopyTo"/>.
+        /// Only valid when <see cref="Device"/> is <see cref="TensorDevice.CPU"/>.
         /// </summary>
         internal ref NativeArray<float> Buffer => ref _buffer;
+
+        /// <summary>
+        /// Raw GPU backing buffer. Internal so only <see cref="GpuBackend"/> can access it directly.
+        /// Only valid when <see cref="Device"/> is <see cref="TensorDevice.GPU"/>.
+        /// </summary>
+        internal GraphicsBuffer GpuBuffer => _gpuBuffer;
 
         /// <summary>Which device this storage resides on.</summary>
         public TensorDevice Device => _device;
 
         /// <summary>Number of elements in this storage.</summary>
-        public int Length => _buffer.Length;
+        public int Length => _size;
 
         /// <summary>Current reference count. Starts at 1 when allocated.</summary>
         public int RefCount => _refCount;
 
         /// <summary>Whether the underlying buffer has been disposed.</summary>
-        public bool IsCreated => _buffer.IsCreated;
+        public bool IsCreated => _device == TensorDevice.GPU ? _gpuBuffer != null : _buffer.IsCreated;
 
         private NativeArray<float> _buffer;
+        private GraphicsBuffer _gpuBuffer;
         private readonly TensorDevice _device;
+        private readonly int _size;
         private int _refCount;
         private bool _disposed;
 
@@ -49,7 +60,13 @@ namespace ChaosRL
                 throw new ArgumentException( $"Storage size must be positive, got {size}", nameof( size ) );
 
             if (device == TensorDevice.GPU)
-                throw new NotSupportedException( "GPU storage is not yet implemented" );
+            {
+                var gpuBuf = new GraphicsBuffer(
+                    GraphicsBuffer.Target.Structured, size, sizeof( float ) );
+                // Zero-initialize via managed array upload
+                gpuBuf.SetData( new float[ size ] );
+                return new TensorStorage( gpuBuf, size );
+            }
 
             var buffer = new NativeArray<float>( size, Allocator.Persistent, NativeArrayOptions.ClearMemory );
             return new TensorStorage( buffer, device );
@@ -59,6 +76,16 @@ namespace ChaosRL
         {
             _buffer = buffer;
             _device = device;
+            _size = buffer.Length;
+            _refCount = 1;
+            _disposed = false;
+        }
+        //------------------------------------------------------------------
+        private TensorStorage( GraphicsBuffer gpuBuffer, int size )
+        {
+            _gpuBuffer = gpuBuffer;
+            _device = TensorDevice.GPU;
+            _size = size;
             _refCount = 1;
             _disposed = false;
         }
@@ -67,10 +94,30 @@ namespace ChaosRL
         /// Element accessor for convenience (scalar readback, test assertions).
         /// Not intended for hot-path computation — use <see cref="AsNativeArray"/> for jobs.
         /// </summary>
+        /// <remarks>
+        /// GPU path performs a synchronous readback/upload per access — debug/test use only.
+        /// </remarks>
         public float this[ int i ]
         {
-            get => _buffer[ i ];
-            set => _buffer[ i ] = value;
+            get
+            {
+                if (_device == TensorDevice.GPU)
+                {
+                    var tmp = new float[ 1 ];
+                    _gpuBuffer.GetData( tmp, 0, i, 1 );
+                    return tmp[ 0 ];
+                }
+                return _buffer[ i ];
+            }
+            set
+            {
+                if (_device == TensorDevice.GPU)
+                {
+                    _gpuBuffer.SetData( new[] { value }, 0, i, 1 );
+                    return;
+                }
+                _buffer[ i ] = value;
+            }
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -84,6 +131,19 @@ namespace ChaosRL
                     "Cannot get NativeArray from GPU storage. Transfer to CPU first via Tensor.ToCpu()." );
 
             return _buffer;
+        }
+        //------------------------------------------------------------------
+        /// <summary>
+        /// Returns the <see cref="GraphicsBuffer"/> for passing to compute shader dispatches.
+        /// Throws if this storage is CPU-resident.
+        /// </summary>
+        public GraphicsBuffer AsGraphicsBuffer()
+        {
+            if (_device != TensorDevice.GPU)
+                throw new InvalidOperationException(
+                    "Cannot get GraphicsBuffer from CPU storage. Transfer to GPU first via Tensor.ToGpu()." );
+
+            return _gpuBuffer;
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -109,9 +169,17 @@ namespace ChaosRL
             if (newCount <= 0)
             {
                 _disposed = true;
-                if (_buffer.IsCreated)
-                    _buffer.Dispose();
-                _buffer = default;
+                if (_device == TensorDevice.GPU)
+                {
+                    _gpuBuffer?.Release();
+                    _gpuBuffer = null;
+                }
+                else
+                {
+                    if (_buffer.IsCreated)
+                        _buffer.Dispose();
+                    _buffer = default;
+                }
             }
         }
         //------------------------------------------------------------------
@@ -122,11 +190,14 @@ namespace ChaosRL
         {
             if (source == null)
                 throw new ArgumentNullException( nameof( source ) );
-            if (source.Length != _buffer.Length)
+            if (source.Length != _size)
                 throw new ArgumentException(
-                    $"Source length {source.Length} doesn't match buffer length {_buffer.Length}" );
+                    $"Source length {source.Length} doesn't match buffer length {_size}" );
 
-            _buffer.CopyFrom( source );
+            if (_device == TensorDevice.GPU)
+                _gpuBuffer.SetData( source );
+            else
+                _buffer.CopyFrom( source );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -136,11 +207,14 @@ namespace ChaosRL
         {
             if (destination == null)
                 throw new ArgumentNullException( nameof( destination ) );
-            if (destination.Length != _buffer.Length)
+            if (destination.Length != _size)
                 throw new ArgumentException(
-                    $"Destination length {destination.Length} doesn't match buffer length {_buffer.Length}" );
+                    $"Destination length {destination.Length} doesn't match buffer length {_size}" );
 
-            _buffer.CopyTo( destination );
+            if (_device == TensorDevice.GPU)
+                _gpuBuffer.GetData( destination );
+            else
+                _buffer.CopyTo( destination );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -151,11 +225,18 @@ namespace ChaosRL
         {
             if (source == null)
                 throw new ArgumentNullException( nameof( source ) );
-            if (source.Length != _buffer.Length)
+            if (source.Length != _size)
                 throw new ArgumentException(
-                    $"Source length {source.Length} doesn't match buffer length {_buffer.Length}" );
+                    $"Source length {source.Length} doesn't match buffer length {_size}" );
 
-            NativeArray<float>.Copy( source._buffer, _buffer );
+            if (_device != source._device)
+                throw new InvalidOperationException(
+                    $"Cannot copy between different devices ({source._device} -> {_device}). Use Tensor.To() for cross-device transfer." );
+
+            if (_device == TensorDevice.GPU)
+                Graphics.CopyBuffer( source._gpuBuffer, _gpuBuffer );
+            else
+                NativeArray<float>.Copy( source._buffer, _buffer );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -163,9 +244,14 @@ namespace ChaosRL
         /// </summary>
         public unsafe void Clear()
         {
+            if (_device == TensorDevice.GPU)
+            {
+                _gpuBuffer.SetData( new float[ _size ] );
+                return;
+            }
             UnsafeUtility.MemClear(
                 NativeArrayUnsafeUtility.GetUnsafePtr( _buffer ),
-                _buffer.Length * sizeof( float ) );
+                _size * sizeof( float ) );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -173,9 +259,17 @@ namespace ChaosRL
         /// </summary>
         public unsafe void Fill( float value )
         {
+            if (_device == TensorDevice.GPU)
+            {
+                var tmp = new float[ _size ];
+                for (int i = 0; i < _size; i++)
+                    tmp[ i ] = value;
+                _gpuBuffer.SetData( tmp );
+                return;
+            }
             UnsafeUtility.MemCpyReplicate(
                 NativeArrayUnsafeUtility.GetUnsafePtr( _buffer ),
-                &value, sizeof( float ), _buffer.Length );
+                &value, sizeof( float ), _size );
         }
         //------------------------------------------------------------------
         public void Dispose()
