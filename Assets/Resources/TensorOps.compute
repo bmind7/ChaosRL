@@ -561,8 +561,10 @@ void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
 }
 
 // ============================================================
-//  MatMul — 64x64 output tile with 4x4 register micro-tiles
+//  MatMul -- 64x64 output tile with 4x4 register micro-tiles
 //  Thread group: 16x16 = 256 threads, each computes a 4x4 block
+//  D3D11-safe register budget: acc[4][4]+regA[4]+regB[4]+overhead
+//  = ~44 regs/thread x 256 = 11,264 < 16,384 limit
 // ============================================================
 
 #define BM  64
@@ -571,7 +573,9 @@ void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
 #define TM  4
 #define TN  4
 
-groupshared float _smA[ BM ][ BK + 1 ];   // +1 padding avoids bank conflicts
+// Shared memory tiles (single declaration, reused by all MatMul variants)
+// +1 padding avoids bank conflicts on column reads
+groupshared float _smA[ BM ][ BK + 1 ];
 groupshared float _smB[ BK ][ BN + 1 ];
 
 #pragma kernel MatMulForward
@@ -603,6 +607,7 @@ void MatMulForward( uint3 gid  : SV_GroupID,
         uint kBase = mm_t * BK;
 
         // Load A tile: BM x BK = 1024 elements, 256 threads -> 4 per thread
+        // Fast-varying thread index maps to K (column) -> coalesced A[row * K + col]
         [unroll] for ( mm_ld = 0; mm_ld < ( BM * BK / 256 ); mm_ld++ )
         {
             uint mm_li = flatIdx + mm_ld * 256;
@@ -615,6 +620,7 @@ void MatMulForward( uint3 gid  : SV_GroupID,
         }
 
         // Load B tile: BK x BN = 1024 elements, 256 threads -> 4 per thread
+        // Fast-varying thread index maps to N (column) -> coalesced B[row * N + col]
         [unroll] for ( mm_ld = 0; mm_ld < ( BK * BN / 256 ); mm_ld++ )
         {
             uint mm_li = flatIdx + mm_ld * 256;
@@ -657,6 +663,190 @@ void MatMulForward( uint3 gid  : SV_GroupID,
             if ( globalCol >= _N ) continue;
             uint idx = globalRow * _N + globalCol;
             _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ mm_ri ][ mm_ci ] : acc[ mm_ri ][ mm_ci ];
+        }
+    }
+}
+
+//------------------------------------------------------------------
+// MatMulForwardBT -- C(M,N) = A(M,K) @ B^T, where B is stored as (N,K)
+// B is read transposed on-the-fly: element (k, col) = B[ col * K + k ]
+// Load pattern: fast-varying thread index maps to K for coalesced B access
+//------------------------------------------------------------------
+
+#pragma kernel MatMulForwardBT
+[numthreads( BN / TN, BM / TM, 1 )]
+void MatMulForwardBT( uint3 gid  : SV_GroupID,
+                      uint3 gtid : SV_GroupThreadID )
+{
+    uint threadCol = gtid.x;
+    uint threadRow = gtid.y;
+    uint flatIdx   = threadRow * ( BN / TN ) + threadCol;
+
+    uint cRowBase = gid.y * BM;
+    uint cColBase = gid.x * BN;
+
+    uint microRow = threadRow * TM;
+    uint microCol = threadCol * TN;
+
+    uint bt_ri, bt_ci, bt_t, bt_ld, bt_k;
+
+    float acc[ TM ][ TN ];
+    [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
+        [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
+            acc[ bt_ri ][ bt_ci ] = 0.0;
+
+    uint numTiles = ( _K + BK - 1 ) / BK;
+    for ( bt_t = 0; bt_t < numTiles; bt_t++ )
+    {
+        uint kBase = bt_t * BK;
+
+        // Load A tile -- same as standard MatMul (coalesced along K)
+        [unroll] for ( bt_ld = 0; bt_ld < ( BM * BK / 256 ); bt_ld++ )
+        {
+            uint li   = flatIdx + bt_ld * 256;
+            uint lRow = li / BK;
+            uint lCol = li % BK;
+            uint gRow = cRowBase + lRow;
+            uint gCol = kBase + lCol;
+            _smA[ lRow ][ lCol ] =
+                ( gRow < _M && gCol < _K ) ? _A[ gRow * _K + gCol ] : 0.0;
+        }
+
+        // Load B tile -- B stored as (N,K) row-major.
+        // Fast-varying index maps to K dimension for coalesced B[n * K + k] access.
+        // Destination: _smB[k_in_tile][n_in_tile]
+        [unroll] for ( bt_ld = 0; bt_ld < ( BK * BN / 256 ); bt_ld++ )
+        {
+            uint li    = flatIdx + bt_ld * 256;
+            uint smCol = li / BK;   // N-index within tile (slow varying)
+            uint smRow = li % BK;   // K-index within tile (fast varying -> coalesced)
+            uint gK    = kBase + smRow;
+            uint gCol  = cColBase + smCol;
+            _smB[ smRow ][ smCol ] =
+                ( gK < _K && gCol < _N ) ? _B[ gCol * _K + gK ] : 0.0;
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+
+        [unroll] for ( bt_k = 0; bt_k < BK; bt_k++ )
+        {
+            float regA[ TM ];
+            float regB[ TN ];
+            [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
+                regA[ bt_ri ] = _smA[ microRow + bt_ri ][ bt_k ];
+            [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
+                regB[ bt_ci ] = _smB[ bt_k ][ microCol + bt_ci ];
+
+            [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
+                [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
+                    acc[ bt_ri ][ bt_ci ] += regA[ bt_ri ] * regB[ bt_ci ];
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
+    {
+        uint globalRow = cRowBase + microRow + bt_ri;
+        if ( globalRow >= _M ) continue;
+        [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
+        {
+            uint globalCol = cColBase + microCol + bt_ci;
+            if ( globalCol >= _N ) continue;
+            uint idx = globalRow * _N + globalCol;
+            _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ bt_ri ][ bt_ci ] : acc[ bt_ri ][ bt_ci ];
+        }
+    }
+}
+
+//------------------------------------------------------------------
+// MatMulForwardAT -- C(M,N) = A^T @ B, where A is stored as (K,M)
+// A is read transposed on-the-fly: element (row, k) = A[ k * M + row ]
+// Load pattern: fast-varying thread index maps to M for coalesced A access
+//------------------------------------------------------------------
+
+#pragma kernel MatMulForwardAT
+[numthreads( BN / TN, BM / TM, 1 )]
+void MatMulForwardAT( uint3 gid  : SV_GroupID,
+                      uint3 gtid : SV_GroupThreadID )
+{
+    uint threadCol = gtid.x;
+    uint threadRow = gtid.y;
+    uint flatIdx   = threadRow * ( BN / TN ) + threadCol;
+
+    uint cRowBase = gid.y * BM;
+    uint cColBase = gid.x * BN;
+
+    uint microRow = threadRow * TM;
+    uint microCol = threadCol * TN;
+
+    uint at_ri, at_ci, at_t, at_ld, at_k;
+
+    float acc[ TM ][ TN ];
+    [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
+        [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
+            acc[ at_ri ][ at_ci ] = 0.0;
+
+    uint numTiles = ( _K + BK - 1 ) / BK;
+    for ( at_t = 0; at_t < numTiles; at_t++ )
+    {
+        uint kBase = at_t * BK;
+
+        // Load A tile -- A stored as (K,M) row-major.
+        // Fast-varying index maps to M dimension for coalesced A[k * M + m] access.
+        // Destination: _smA[m_in_tile][k_in_tile]
+        [unroll] for ( at_ld = 0; at_ld < ( BM * BK / 256 ); at_ld++ )
+        {
+            uint li    = flatIdx + at_ld * 256;
+            uint smCol = li / BM;   // K-index within tile (slow varying)
+            uint smRow = li % BM;   // M-index within tile (fast varying -> coalesced)
+            uint gRow  = cRowBase + smRow;
+            uint gK    = kBase + smCol;
+            _smA[ smRow ][ smCol ] =
+                ( gRow < _M && gK < _K ) ? _A[ gK * _M + gRow ] : 0.0;
+        }
+
+        // Load B tile -- same as standard MatMul (coalesced along N)
+        [unroll] for ( at_ld = 0; at_ld < ( BK * BN / 256 ); at_ld++ )
+        {
+            uint li   = flatIdx + at_ld * 256;
+            uint lRow = li / BN;
+            uint lCol = li % BN;
+            uint gRow = kBase + lRow;
+            uint gCol = cColBase + lCol;
+            _smB[ lRow ][ lCol ] =
+                ( gRow < _K && gCol < _N ) ? _B[ gRow * _N + gCol ] : 0.0;
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+
+        [unroll] for ( at_k = 0; at_k < BK; at_k++ )
+        {
+            float regA[ TM ];
+            float regB[ TN ];
+            [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
+                regA[ at_ri ] = _smA[ microRow + at_ri ][ at_k ];
+            [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
+                regB[ at_ci ] = _smB[ at_k ][ microCol + at_ci ];
+
+            [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
+                [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
+                    acc[ at_ri ][ at_ci ] += regA[ at_ri ] * regB[ at_ci ];
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+    }
+
+    [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
+    {
+        uint globalRow = cRowBase + microRow + at_ri;
+        if ( globalRow >= _M ) continue;
+        [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
+        {
+            uint globalCol = cColBase + microCol + at_ci;
+            if ( globalCol >= _N ) continue;
+            uint idx = globalRow * _N + globalCol;
+            _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ at_ri ][ at_ci ] : acc[ at_ri ][ at_ci ];
         }
     }
 }

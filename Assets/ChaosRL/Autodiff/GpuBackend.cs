@@ -73,6 +73,8 @@ namespace ChaosRL
 
         // MatMul
         private readonly int _matMulForwardKernel;
+        private readonly int _matMulForwardBTKernel;
+        private readonly int _matMulForwardATKernel;
         private readonly int _transposeKernel;
 
         // Data movement
@@ -146,6 +148,8 @@ namespace ChaosRL
 
             // MatMul
             _matMulForwardKernel = _shader.FindKernel( "MatMulForward" );
+            _matMulForwardBTKernel = _shader.FindKernel( "MatMulForwardBT" );
+            _matMulForwardATKernel = _shader.FindKernel( "MatMulForwardAT" );
             _transposeKernel = _shader.FindKernel( "Transpose" );
 
             // Data movement
@@ -634,36 +638,36 @@ namespace ChaosRL
                                     int M, int K, int N,
                                     bool aRequiresGrad, bool bRequiresGrad )
         {
-            // dA = dC(M,N) @ B^T(N,K)   — need B transposed (K,N) -> (N,K)
-            // dB = A^T(K,M) @ dC(M,N)   — need A transposed (M,K) -> (K,M)
-
-            GraphicsBuffer tempBT = null;
-            GraphicsBuffer tempAT = null;
-
-            try
+            // dA(M,K) += dC(M,N) @ B^T  — B is stored (K,N), read transposed via BT kernel
+            if (aRequiresGrad)
             {
-                if (aRequiresGrad)
-                {
-                    int bSize = K * N;
-                    tempBT = AllocTempRaw( bSize );
-                    DispatchTranspose( bData.GpuBuffer, tempBT, K, N, bSize );
-                    // dA(M,K) += dC(M,N) @ BT(N,K)
-                    MatMul_Internal( resultGrad.GpuBuffer, tempBT, aGrad.GpuBuffer, M, N, K, accumulate: true );
-                }
+                _shader.SetInt( "_M", M );
+                _shader.SetInt( "_K", N );  // inner dimension is N for dC(M,N) @ B^T(N,K)
+                _shader.SetInt( "_N", K );  // output cols = K
+                _shader.SetInt( "_Accumulate", 1 );
+                _shader.SetBuffer( _matMulForwardBTKernel, "_A", resultGrad.GpuBuffer );
+                _shader.SetBuffer( _matMulForwardBTKernel, "_B", bData.GpuBuffer );
+                _shader.SetBuffer( _matMulForwardBTKernel, "_Result", aGrad.GpuBuffer );
 
-                if (bRequiresGrad)
-                {
-                    int aSize = M * K;
-                    tempAT = AllocTempRaw( aSize );
-                    DispatchTranspose( aData.GpuBuffer, tempAT, M, K, aSize );
-                    // dB(K,N) += AT(K,M) @ dC(M,N)
-                    MatMul_Internal( tempAT, resultGrad.GpuBuffer, bGrad.GpuBuffer, K, M, N, accumulate: true );
-                }
+                int gx = (K + BN - 1) / BN;
+                int gy = (M + BM - 1) / BM;
+                _shader.Dispatch( _matMulForwardBTKernel, gx, gy, 1 );
             }
-            finally
+
+            // dB(K,N) += A^T @ dC(M,N)  — A is stored (M,K), read transposed via AT kernel
+            if (bRequiresGrad)
             {
-                tempBT?.Release();
-                tempAT?.Release();
+                _shader.SetInt( "_M", K );  // output rows = K
+                _shader.SetInt( "_K", M );  // inner dimension is M for A^T(K,M) @ dC(M,N)
+                _shader.SetInt( "_N", N );
+                _shader.SetInt( "_Accumulate", 1 );
+                _shader.SetBuffer( _matMulForwardATKernel, "_A", aData.GpuBuffer );
+                _shader.SetBuffer( _matMulForwardATKernel, "_B", resultGrad.GpuBuffer );
+                _shader.SetBuffer( _matMulForwardATKernel, "_Result", bGrad.GpuBuffer );
+
+                int gx = (N + BN - 1) / BN;
+                int gy = (K + BM - 1) / BM;
+                _shader.Dispatch( _matMulForwardATKernel, gx, gy, 1 );
             }
         }
 
