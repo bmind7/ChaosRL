@@ -19,7 +19,7 @@ namespace ChaosRL
         private const int THREADS = 256;
 
         // MatMul tile dimensions (must match TensorOps.compute BM / BN defines)
-        private const int BM = 64;
+        private const int BM = 128;
         private const int BN = 64;
 
         // Transpose tile size (must match TensorOps.compute TRANS_TILE define)

@@ -561,22 +561,201 @@ void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
 }
 
 // ============================================================
-//  MatMul -- 64x64 output tile with 4x4 register micro-tiles
-//  Thread group: 16x16 = 256 threads, each computes a 4x4 block
-//  D3D11-safe register budget: acc[4][4]+regA[4]+regB[4]+overhead
-//  = ~44 regs/thread x 256 = 11,264 < 16,384 limit
+//  MatMul -- 128x128 symmetric output tile, 8x4 micro-tiles
+//  Thread group: 16x16 = 256 threads, each computes an 8x4 block
+//  Register prefetch: loads next tile into registers while computing current
+//  tile, allowing the GPU scheduler to overlap memory latency with FMA.
+//  Scalar accumulators avoid D3D11 "indexable temp" register penalty.
 // ============================================================
 
-#define BM  64
+#define BM  128
 #define BN  64
 #define BK  16
-#define TM  4
+#define TM  8
 #define TN  4
+#define THREADS_PER_GROUP ((BM/TM)*(BN/TN))
+#define N_A_LOADS (BM * BK / THREADS_PER_GROUP)
+#define N_B_LOADS (BK * BN / THREADS_PER_GROUP)
 
 // Shared memory tiles (single declaration, reused by all MatMul variants)
 // +1 padding avoids bank conflicts on column reads
 groupshared float _smA[ BM ][ BK + 1 ];
 groupshared float _smB[ BK ][ BN + 1 ];
+
+// ------------------------------------------------------------------
+//  Macro: scalar 8x4 outer-product accumulation from shared memory.
+//  Uses 32 scalar accumulators (c00..c73) to avoid indexable temps.
+//  Expects: microRow, microCol, mm_k defined in caller scope.
+// ------------------------------------------------------------------
+#define OUTER_PRODUCT_8x4                                       \
+{                                                               \
+    float a0 = _smA[ microRow     ][ mm_k ];                    \
+    float a1 = _smA[ microRow + 1 ][ mm_k ];                    \
+    float a2 = _smA[ microRow + 2 ][ mm_k ];                    \
+    float a3 = _smA[ microRow + 3 ][ mm_k ];                    \
+    float a4 = _smA[ microRow + 4 ][ mm_k ];                    \
+    float a5 = _smA[ microRow + 5 ][ mm_k ];                    \
+    float a6 = _smA[ microRow + 6 ][ mm_k ];                    \
+    float a7 = _smA[ microRow + 7 ][ mm_k ];                    \
+    float b0 = _smB[ mm_k ][ microCol     ];                    \
+    float b1 = _smB[ mm_k ][ microCol + 1 ];                    \
+    float b2 = _smB[ mm_k ][ microCol + 2 ];                    \
+    float b3 = _smB[ mm_k ][ microCol + 3 ];                    \
+    c00 += a0*b0; c01 += a0*b1; c02 += a0*b2; c03 += a0*b3;    \
+    c10 += a1*b0; c11 += a1*b1; c12 += a1*b2; c13 += a1*b3;    \
+    c20 += a2*b0; c21 += a2*b1; c22 += a2*b2; c23 += a2*b3;    \
+    c30 += a3*b0; c31 += a3*b1; c32 += a3*b2; c33 += a3*b3;    \
+    c40 += a4*b0; c41 += a4*b1; c42 += a4*b2; c43 += a4*b3;    \
+    c50 += a5*b0; c51 += a5*b1; c52 += a5*b2; c53 += a5*b3;    \
+    c60 += a6*b0; c61 += a6*b1; c62 += a6*b2; c63 += a6*b3;    \
+    c70 += a7*b0; c71 += a7*b1; c72 += a7*b2; c73 += a7*b3;    \
+}
+
+// ------------------------------------------------------------------
+//  Macro: write-back 8x4 scalar accumulators to global memory.
+//  Expects: cRowBase, microRow, cColBase, microCol, _Accumulate.
+// ------------------------------------------------------------------
+#define WB_ELEM( R, C, ACC )                                                                            \
+    {                                                                                                   \
+        uint wgc = cColBase + microCol + (C);                                                           \
+        if ( wgc < _N ) { uint wi = (cRowBase + microRow + (R)) * _N + wgc;                             \
+            _Result[wi] = (_Accumulate != 0) ? _Result[wi] + ACC : ACC; }                               \
+    }
+
+#define WB_ROW( R, C0, C1, C2, C3 )                                                                    \
+    if ( cRowBase + microRow + (R) < _M ) { WB_ELEM(R,0,C0) WB_ELEM(R,1,C1) WB_ELEM(R,2,C2) WB_ELEM(R,3,C3) }
+
+#define WRITEBACK_8x4                                           \
+{                                                               \
+    WB_ROW( 0, c00, c01, c02, c03 )                             \
+    WB_ROW( 1, c10, c11, c12, c13 )                             \
+    WB_ROW( 2, c20, c21, c22, c23 )                             \
+    WB_ROW( 3, c30, c31, c32, c33 )                             \
+    WB_ROW( 4, c40, c41, c42, c43 )                             \
+    WB_ROW( 5, c50, c51, c52, c53 )                             \
+    WB_ROW( 6, c60, c61, c62, c63 )                             \
+    WB_ROW( 7, c70, c71, c72, c73 )                             \
+}
+
+// ------------------------------------------------------------------
+//  Macro: declare + zero-init the 32 scalar accumulators.
+// ------------------------------------------------------------------
+#define DECLARE_ACC_8x4                                         \
+    float c00=0,c01=0,c02=0,c03=0;                             \
+    float c10=0,c11=0,c12=0,c13=0;                             \
+    float c20=0,c21=0,c22=0,c23=0;                             \
+    float c30=0,c31=0,c32=0,c33=0;                             \
+    float c40=0,c41=0,c42=0,c43=0;                             \
+    float c50=0,c51=0,c52=0,c53=0;                             \
+    float c60=0,c61=0,c62=0,c63=0;                             \
+    float c70=0,c71=0,c72=0,c73=0;
+
+// ------------------------------------------------------------------
+//  Register prefetch: 12 scalar registers to hold the next tile's
+//  data while computing on the current shared-memory tile.
+//  A tile: N_A_LOADS = 8 elements/thread, B tile: N_B_LOADS = 4.
+// ------------------------------------------------------------------
+#define DECLARE_PREFETCH                                        \
+    float rA0, rA1, rA2, rA3, rA4, rA5, rA6, rA7;             \
+    float rB0, rB1, rB2, rB3;
+
+// --- Element-level prefetch: load one element from global to register ---
+
+#define PF_ASTD( REG, LD, KB )                                  \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    uint _r = cRowBase + _i / BK;                               \
+    uint _c = (KB) + _i % BK;                                   \
+    REG = ( _r < _M && _c < _K ) ? _A[ _r * _K + _c ] : 0.0;  \
+}
+
+#define PF_BSTD( REG, LD, KB )                                  \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    uint _r = (KB) + _i / BN;                                   \
+    uint _c = cColBase + _i % BN;                               \
+    REG = ( _r < _K && _c < _N ) ? _B[ _r * _N + _c ] : 0.0;  \
+}
+
+#define PF_BBT( REG, LD, KB )                                   \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    uint _gK = (KB) + _i % BK;                                  \
+    uint _gC = cColBase + _i / BK;                              \
+    REG = ( _gK < _K && _gC < _N ) ? _B[ _gC * _K + _gK ] : 0.0; \
+}
+
+#define PF_AAT( REG, LD, KB )                                   \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    uint _gR = cRowBase + _i % BM;                              \
+    uint _gK = (KB) + _i / BM;                                  \
+    REG = ( _gR < _M && _gK < _K ) ? _A[ _gK * _M + _gR ] : 0.0; \
+}
+
+// --- Element-level store: write one register to shared memory ---
+
+#define ST_ASTD( REG, LD )                                      \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    _smA[ _i / BK ][ _i % BK ] = REG;                          \
+}
+
+#define ST_BSTD( REG, LD )                                      \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    _smB[ _i / BN ][ _i % BN ] = REG;                          \
+}
+
+#define ST_BBT( REG, LD )                                       \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    _smB[ _i % BK ][ _i / BK ] = REG;                          \
+}
+
+#define ST_AAT( REG, LD )                                       \
+{                                                               \
+    uint _i = flatIdx + (LD) * THREADS_PER_GROUP;               \
+    _smA[ _i % BM ][ _i / BM ] = REG;                          \
+}
+
+// --- Aggregate prefetch: load full tile to registers ---
+
+#define PF_A_STD_ALL( KB )                                                                          \
+    PF_ASTD(rA0,0,KB) PF_ASTD(rA1,1,KB) PF_ASTD(rA2,2,KB) PF_ASTD(rA3,3,KB)                      \
+    PF_ASTD(rA4,4,KB) PF_ASTD(rA5,5,KB) PF_ASTD(rA6,6,KB) PF_ASTD(rA7,7,KB)
+
+#define PF_B_STD_ALL( KB )                                                                          \
+    PF_BSTD(rB0,0,KB) PF_BSTD(rB1,1,KB) PF_BSTD(rB2,2,KB) PF_BSTD(rB3,3,KB)
+
+#define PF_B_BT_ALL( KB )                                                                           \
+    PF_BBT(rB0,0,KB) PF_BBT(rB1,1,KB) PF_BBT(rB2,2,KB) PF_BBT(rB3,3,KB)
+
+#define PF_A_AT_ALL( KB )                                                                            \
+    PF_AAT(rA0,0,KB) PF_AAT(rA1,1,KB) PF_AAT(rA2,2,KB) PF_AAT(rA3,3,KB)                          \
+    PF_AAT(rA4,4,KB) PF_AAT(rA5,5,KB) PF_AAT(rA6,6,KB) PF_AAT(rA7,7,KB)
+
+// --- Aggregate store: write all registers to shared ---
+
+#define ST_A_STD_ALL                                                                                 \
+    ST_ASTD(rA0,0) ST_ASTD(rA1,1) ST_ASTD(rA2,2) ST_ASTD(rA3,3)                                   \
+    ST_ASTD(rA4,4) ST_ASTD(rA5,5) ST_ASTD(rA6,6) ST_ASTD(rA7,7)
+
+#define ST_B_STD_ALL                                                                                 \
+    ST_BSTD(rB0,0) ST_BSTD(rB1,1) ST_BSTD(rB2,2) ST_BSTD(rB3,3)
+
+#define ST_B_BT_ALL                                                                                  \
+    ST_BBT(rB0,0) ST_BBT(rB1,1) ST_BBT(rB2,2) ST_BBT(rB3,3)
+
+#define ST_A_AT_ALL                                                                                  \
+    ST_AAT(rA0,0) ST_AAT(rA1,1) ST_AAT(rA2,2) ST_AAT(rA3,3)                                       \
+    ST_AAT(rA4,4) ST_AAT(rA5,5) ST_AAT(rA6,6) ST_AAT(rA7,7)
+
+// ==================================================================
+//  MatMulForward -- C(M,N) = A(M,K) @ B(K,N)
+//  Double-buffered: prefetch next tile to registers while computing
+//  current tile from shared memory.
+// ==================================================================
 
 #pragma kernel MatMulForward
 [numthreads( BN / TN, BM / TM, 1 )]
@@ -593,85 +772,53 @@ void MatMulForward( uint3 gid  : SV_GroupID,
     uint microRow = threadRow * TM;
     uint microCol = threadCol * TN;
 
-    // Declare loop counters once to avoid D3D11 HLSL scoping warnings
-    uint mm_ri, mm_ci, mm_t, mm_ld, mm_k;
+    uint mm_t, mm_k, kBase;
 
-    float acc[ TM ][ TN ];
-    [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
-        [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
-            acc[ mm_ri ][ mm_ci ] = 0.0;
+    DECLARE_ACC_8x4
+    DECLARE_PREFETCH
 
     uint numTiles = ( _K + BK - 1 ) / BK;
-    for ( mm_t = 0; mm_t < numTiles; mm_t++ )
+
+    // --- Prologue: load first tile directly to shared ---
+    PF_A_STD_ALL( 0 )
+    PF_B_STD_ALL( 0 )
+    ST_A_STD_ALL
+    ST_B_STD_ALL
+    GroupMemoryBarrierWithGroupSync();
+
+    // --- Main loop: prefetch next tile while computing current ---
+    for ( mm_t = 1; mm_t < numTiles; mm_t++ )
     {
-        uint kBase = mm_t * BK;
+        kBase = mm_t * BK;
 
-        // Load A tile: BM x BK = 1024 elements, 256 threads -> 4 per thread
-        // Fast-varying thread index maps to K (column) -> coalesced A[row * K + col]
-        [unroll] for ( mm_ld = 0; mm_ld < ( BM * BK / 256 ); mm_ld++ )
-        {
-            uint mm_li = flatIdx + mm_ld * 256;
-            uint lRow  = mm_li / BK;
-            uint lCol  = mm_li % BK;
-            uint gRow  = cRowBase + lRow;
-            uint gCol  = kBase + lCol;
-            _smA[ lRow ][ lCol ] =
-                ( gRow < _M && gCol < _K ) ? _A[ gRow * _K + gCol ] : 0.0;
-        }
+        // Issue global loads into registers (will overlap with FMAs below)
+        PF_A_STD_ALL( kBase )
+        PF_B_STD_ALL( kBase )
 
-        // Load B tile: BK x BN = 1024 elements, 256 threads -> 4 per thread
-        // Fast-varying thread index maps to N (column) -> coalesced B[row * N + col]
-        [unroll] for ( mm_ld = 0; mm_ld < ( BK * BN / 256 ); mm_ld++ )
-        {
-            uint mm_li = flatIdx + mm_ld * 256;
-            uint lRow  = mm_li / BN;
-            uint lCol  = mm_li % BN;
-            uint gRow  = kBase + lRow;
-            uint gCol  = cColBase + lCol;
-            _smB[ lRow ][ lCol ] =
-                ( gRow < _K && gCol < _N ) ? _B[ gRow * _N + gCol ] : 0.0;
-        }
-
-        GroupMemoryBarrierWithGroupSync();
-
-        // Outer product accumulation over K tile
+        // Compute on current shared memory tile
         [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
-        {
-            float regA[ TM ];
-            float regB[ TN ];
-            [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
-                regA[ mm_ri ] = _smA[ microRow + mm_ri ][ mm_k ];
-            [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
-                regB[ mm_ci ] = _smB[ mm_k ][ microCol + mm_ci ];
+            OUTER_PRODUCT_8x4
 
-            [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
-                [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
-                    acc[ mm_ri ][ mm_ci ] += regA[ mm_ri ] * regB[ mm_ci ];
-        }
+        GroupMemoryBarrierWithGroupSync();
+
+        // Write prefetched registers to shared memory
+        ST_A_STD_ALL
+        ST_B_STD_ALL
 
         GroupMemoryBarrierWithGroupSync();
     }
 
-    // Write results
-    [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
-    {
-        uint globalRow = cRowBase + microRow + mm_ri;
-        if ( globalRow >= _M ) continue;
-        [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
-        {
-            uint globalCol = cColBase + microCol + mm_ci;
-            if ( globalCol >= _N ) continue;
-            uint idx = globalRow * _N + globalCol;
-            _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ mm_ri ][ mm_ci ] : acc[ mm_ri ][ mm_ci ];
-        }
-    }
+    // --- Epilogue: compute last tile ---
+    [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
+        OUTER_PRODUCT_8x4
+
+    WRITEBACK_8x4
 }
 
-//------------------------------------------------------------------
-// MatMulForwardBT -- C(M,N) = A(M,K) @ B^T, where B is stored as (N,K)
-// B is read transposed on-the-fly: element (k, col) = B[ col * K + k ]
-// Load pattern: fast-varying thread index maps to K for coalesced B access
-//------------------------------------------------------------------
+// ==================================================================
+//  MatMulForwardBT -- C(M,N) = A(M,K) @ B^T, where B stored as (N,K)
+//  Double-buffered with register prefetch.
+// ==================================================================
 
 #pragma kernel MatMulForwardBT
 [numthreads( BN / TN, BM / TM, 1 )]
@@ -688,82 +835,50 @@ void MatMulForwardBT( uint3 gid  : SV_GroupID,
     uint microRow = threadRow * TM;
     uint microCol = threadCol * TN;
 
-    uint bt_ri, bt_ci, bt_t, bt_ld, bt_k;
+    uint mm_t, mm_k, kBase;
 
-    float acc[ TM ][ TN ];
-    [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
-        [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
-            acc[ bt_ri ][ bt_ci ] = 0.0;
+    DECLARE_ACC_8x4
+    DECLARE_PREFETCH
 
     uint numTiles = ( _K + BK - 1 ) / BK;
-    for ( bt_t = 0; bt_t < numTiles; bt_t++ )
+
+    // --- Prologue: load first tile directly to shared ---
+    PF_A_STD_ALL( 0 )
+    PF_B_BT_ALL( 0 )
+    ST_A_STD_ALL
+    ST_B_BT_ALL
+    GroupMemoryBarrierWithGroupSync();
+
+    // --- Main loop ---
+    for ( mm_t = 1; mm_t < numTiles; mm_t++ )
     {
-        uint kBase = bt_t * BK;
+        kBase = mm_t * BK;
 
-        // Load A tile -- same as standard MatMul (coalesced along K)
-        [unroll] for ( bt_ld = 0; bt_ld < ( BM * BK / 256 ); bt_ld++ )
-        {
-            uint li   = flatIdx + bt_ld * 256;
-            uint lRow = li / BK;
-            uint lCol = li % BK;
-            uint gRow = cRowBase + lRow;
-            uint gCol = kBase + lCol;
-            _smA[ lRow ][ lCol ] =
-                ( gRow < _M && gCol < _K ) ? _A[ gRow * _K + gCol ] : 0.0;
-        }
+        PF_A_STD_ALL( kBase )
+        PF_B_BT_ALL( kBase )
 
-        // Load B tile -- B stored as (N,K) row-major.
-        // Fast-varying index maps to K dimension for coalesced B[n * K + k] access.
-        // Destination: _smB[k_in_tile][n_in_tile]
-        [unroll] for ( bt_ld = 0; bt_ld < ( BK * BN / 256 ); bt_ld++ )
-        {
-            uint li    = flatIdx + bt_ld * 256;
-            uint smCol = li / BK;   // N-index within tile (slow varying)
-            uint smRow = li % BK;   // K-index within tile (fast varying -> coalesced)
-            uint gK    = kBase + smRow;
-            uint gCol  = cColBase + smCol;
-            _smB[ smRow ][ smCol ] =
-                ( gK < _K && gCol < _N ) ? _B[ gCol * _K + gK ] : 0.0;
-        }
+        [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
+            OUTER_PRODUCT_8x4
 
         GroupMemoryBarrierWithGroupSync();
 
-        [unroll] for ( bt_k = 0; bt_k < BK; bt_k++ )
-        {
-            float regA[ TM ];
-            float regB[ TN ];
-            [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
-                regA[ bt_ri ] = _smA[ microRow + bt_ri ][ bt_k ];
-            [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
-                regB[ bt_ci ] = _smB[ bt_k ][ microCol + bt_ci ];
-
-            [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
-                [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
-                    acc[ bt_ri ][ bt_ci ] += regA[ bt_ri ] * regB[ bt_ci ];
-        }
+        ST_A_STD_ALL
+        ST_B_BT_ALL
 
         GroupMemoryBarrierWithGroupSync();
     }
 
-    [unroll] for ( bt_ri = 0; bt_ri < TM; bt_ri++ )
-    {
-        uint globalRow = cRowBase + microRow + bt_ri;
-        if ( globalRow >= _M ) continue;
-        [unroll] for ( bt_ci = 0; bt_ci < TN; bt_ci++ )
-        {
-            uint globalCol = cColBase + microCol + bt_ci;
-            if ( globalCol >= _N ) continue;
-            uint idx = globalRow * _N + globalCol;
-            _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ bt_ri ][ bt_ci ] : acc[ bt_ri ][ bt_ci ];
-        }
-    }
+    // --- Epilogue ---
+    [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
+        OUTER_PRODUCT_8x4
+
+    WRITEBACK_8x4
 }
 
-//------------------------------------------------------------------
-// MatMulForwardAT -- C(M,N) = A^T @ B, where A is stored as (K,M)
-// A is read transposed on-the-fly: element (row, k) = A[ k * M + row ]
-// Load pattern: fast-varying thread index maps to M for coalesced A access
-//------------------------------------------------------------------
+// ==================================================================
+//  MatMulForwardAT -- C(M,N) = A^T @ B, where A stored as (K,M)
+//  Double-buffered with register prefetch.
+// ==================================================================
 
 #pragma kernel MatMulForwardAT
 [numthreads( BN / TN, BM / TM, 1 )]
@@ -780,75 +895,44 @@ void MatMulForwardAT( uint3 gid  : SV_GroupID,
     uint microRow = threadRow * TM;
     uint microCol = threadCol * TN;
 
-    uint at_ri, at_ci, at_t, at_ld, at_k;
+    uint mm_t, mm_k, kBase;
 
-    float acc[ TM ][ TN ];
-    [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
-        [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
-            acc[ at_ri ][ at_ci ] = 0.0;
+    DECLARE_ACC_8x4
+    DECLARE_PREFETCH
 
     uint numTiles = ( _K + BK - 1 ) / BK;
-    for ( at_t = 0; at_t < numTiles; at_t++ )
+
+    // --- Prologue: load first tile directly to shared ---
+    PF_A_AT_ALL( 0 )
+    PF_B_STD_ALL( 0 )
+    ST_A_AT_ALL
+    ST_B_STD_ALL
+    GroupMemoryBarrierWithGroupSync();
+
+    // --- Main loop ---
+    for ( mm_t = 1; mm_t < numTiles; mm_t++ )
     {
-        uint kBase = at_t * BK;
+        kBase = mm_t * BK;
 
-        // Load A tile -- A stored as (K,M) row-major.
-        // Fast-varying index maps to M dimension for coalesced A[k * M + m] access.
-        // Destination: _smA[m_in_tile][k_in_tile]
-        [unroll] for ( at_ld = 0; at_ld < ( BM * BK / 256 ); at_ld++ )
-        {
-            uint li    = flatIdx + at_ld * 256;
-            uint smCol = li / BM;   // K-index within tile (slow varying)
-            uint smRow = li % BM;   // M-index within tile (fast varying -> coalesced)
-            uint gRow  = cRowBase + smRow;
-            uint gK    = kBase + smCol;
-            _smA[ smRow ][ smCol ] =
-                ( gRow < _M && gK < _K ) ? _A[ gK * _M + gRow ] : 0.0;
-        }
+        PF_A_AT_ALL( kBase )
+        PF_B_STD_ALL( kBase )
 
-        // Load B tile -- same as standard MatMul (coalesced along N)
-        [unroll] for ( at_ld = 0; at_ld < ( BK * BN / 256 ); at_ld++ )
-        {
-            uint li   = flatIdx + at_ld * 256;
-            uint lRow = li / BN;
-            uint lCol = li % BN;
-            uint gRow = kBase + lRow;
-            uint gCol = cColBase + lCol;
-            _smB[ lRow ][ lCol ] =
-                ( gRow < _K && gCol < _N ) ? _B[ gRow * _N + gCol ] : 0.0;
-        }
+        [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
+            OUTER_PRODUCT_8x4
 
         GroupMemoryBarrierWithGroupSync();
 
-        [unroll] for ( at_k = 0; at_k < BK; at_k++ )
-        {
-            float regA[ TM ];
-            float regB[ TN ];
-            [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
-                regA[ at_ri ] = _smA[ microRow + at_ri ][ at_k ];
-            [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
-                regB[ at_ci ] = _smB[ at_k ][ microCol + at_ci ];
-
-            [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
-                [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
-                    acc[ at_ri ][ at_ci ] += regA[ at_ri ] * regB[ at_ci ];
-        }
+        ST_A_AT_ALL
+        ST_B_STD_ALL
 
         GroupMemoryBarrierWithGroupSync();
     }
 
-    [unroll] for ( at_ri = 0; at_ri < TM; at_ri++ )
-    {
-        uint globalRow = cRowBase + microRow + at_ri;
-        if ( globalRow >= _M ) continue;
-        [unroll] for ( at_ci = 0; at_ci < TN; at_ci++ )
-        {
-            uint globalCol = cColBase + microCol + at_ci;
-            if ( globalCol >= _N ) continue;
-            uint idx = globalRow * _N + globalCol;
-            _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ at_ri ][ at_ci ] : acc[ at_ri ][ at_ci ];
-        }
-    }
+    // --- Epilogue ---
+    [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
+        OUTER_PRODUCT_8x4
+
+    WRITEBACK_8x4
 }
 
 //------------------------------------------------------------------

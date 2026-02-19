@@ -71,7 +71,8 @@ namespace ChaosRL
             if (device == TensorDevice.GPU)
             {
                 var gpuBuf = new GraphicsBuffer(
-                    GraphicsBuffer.Target.Structured, size, sizeof( float ) );
+                    GraphicsBuffer.Target.Structured,
+                    size, sizeof( float ) );
                 // Zero-initialize via compute dispatch if available, else managed upload
                 if (GpuZeroFill != null)
                     GpuZeroFill( gpuBuf, size );

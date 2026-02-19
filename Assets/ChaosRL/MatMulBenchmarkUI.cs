@@ -152,9 +152,9 @@ namespace ChaosRL
             };
 
             sb.AppendLine( "GPU Results (MatMul Only):" );
-            sb.AppendLine( new string( '-', 80 ) );
-            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Min (ms)",-14} {"Avg (ms)",-14} {"Std (ms)",-14} {"Peak GFLOPS",-14} {"Avg GFLOPS",-14}" );
+            sb.AppendLine( new string( '-', 100 ) );
             _benchmarkResults = sb.ToString();
             yield return null;
 
@@ -164,13 +164,13 @@ namespace ChaosRL
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
             sb.AppendLine();
 
             sb.AppendLine( "GPU Results (MatMul + Backward):" );
-            sb.AppendLine( new string( '-', 80 ) );
-            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"Min (ms)",-14} {"Avg (ms)",-14} {"Std (ms)",-14} {"Peak GFLOPS",-14} {"Avg GFLOPS",-14}" );
+            sb.AppendLine( new string( '-', 100 ) );
             _benchmarkResults = sb.ToString();
             yield return null;
 
@@ -180,7 +180,7 @@ namespace ChaosRL
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
             sb.AppendLine( "Done." );
 
             _benchmarkResults = sb.ToString();
@@ -237,8 +237,8 @@ namespace ChaosRL
         {
             using var scope = new TensorScope();
 
-            const int warmup = 3;
-            const int iterations = 10;
+            const int warmup = 5;
+            const int iterations = 50;
 
             var aArr = new float[ M * K ];
             var bArr = new float[ K * N ];
@@ -249,27 +249,35 @@ namespace ChaosRL
 
             var a = new Tensor( new[] { M, K }, device: TensorDevice.GPU );
             var b = new Tensor( new[] { K, N }, device: TensorDevice.GPU );
+            var c = new Tensor( new[] { M, N }, device: TensorDevice.GPU );
             a.Data.CopyFrom( aArr );
             b.Data.CopyFrom( bArr );
 
+            var backend = (GpuBackend)Tensor.GpuBackend;
+
             for (int i = 0; i < warmup; i++)
             {
-                var r = a.MatMul( b );
-                GpuSync( r );
+                backend.MatMul( a.Data, b.Data, c.Data, M, K, N, false );
+                GpuSync( c );
             }
 
             double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
                 var sw = Stopwatch.StartNew();
-                var r = a.MatMul( b );
-                GpuSync( r );
+                backend.MatMul( a.Data, b.Data, c.Data, M, K, N, false );
+                GpuSync( c );
                 sw.Stop();
                 times[ i ] = sw.Elapsed.TotalMilliseconds;
             }
 
+            double minTime = double.MaxValue;
             double avgTime = 0;
-            foreach (var t in times) avgTime += t;
+            foreach (var t in times)
+            {
+                avgTime += t;
+                if (t < minTime) minTime = t;
+            }
             avgTime /= iterations;
 
             double sumSquares = 0;
@@ -277,10 +285,11 @@ namespace ChaosRL
             double stdDev = Math.Sqrt( sumSquares / iterations );
 
             var flops = 2.0 * M * K * N;
-            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
+            var peakGflops = (flops / (minTime / 1000.0)) / 1e9;
+            var avgGflops = (flops / (avgTime / 1000.0)) / 1e9;
 
             string sizeStr = $"{M}x{K} @ {K}x{N}";
-            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+            sb.AppendLine( $"{sizeStr,-25} {minTime,-14:F3} {avgTime,-14:F3} {stdDev,-14:F3} {peakGflops,-14:F2} {avgGflops,-14:F2}" );
         }
         //------------------------------------------------------------------
         private void RunTensorMatMulWithBackward( int M, int K, int N, StringBuilder sb )
@@ -342,8 +351,8 @@ namespace ChaosRL
         {
             using var scope = new TensorScope();
 
-            const int warmup = 3;
-            const int iterations = 10;
+            const int warmup = 5;
+            const int iterations = 50;
 
             var aArr = new float[ M * K ];
             var bArr = new float[ K * N ];
@@ -381,8 +390,13 @@ namespace ChaosRL
                 times[ i ] = sw.Elapsed.TotalMilliseconds;
             }
 
+            double minTime = double.MaxValue;
             double avgTime = 0;
-            foreach (var t in times) avgTime += t;
+            foreach (var t in times)
+            {
+                avgTime += t;
+                if (t < minTime) minTime = t;
+            }
             avgTime /= iterations;
 
             double sumSquares = 0;
@@ -390,10 +404,11 @@ namespace ChaosRL
             double stdDev = Math.Sqrt( sumSquares / iterations );
 
             var flops = 6.0 * M * K * N;
-            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
+            var peakGflops = (flops / (minTime / 1000.0)) / 1e9;
+            var avgGflops = (flops / (avgTime / 1000.0)) / 1e9;
 
             string sizeStr = $"{M}x{K} @ {K}x{N}";
-            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+            sb.AppendLine( $"{sizeStr,-25} {minTime,-14:F3} {avgTime,-14:F3} {stdDev,-14:F3} {peakGflops,-14:F2} {avgGflops,-14:F2}" );
         }
         //------------------------------------------------------------------
         /// <summary>
