@@ -17,7 +17,13 @@ namespace ChaosRL
         //==================================================================
 
         private const int THREADS = 256;
-        private const int TILE = 16;
+
+        // MatMul tile dimensions (must match TensorOps.compute BM / BN defines)
+        private const int BM = 64;
+        private const int BN = 64;
+
+        // Transpose tile size (must match TensorOps.compute TRANS_TILE define)
+        private const int TRANS_TILE = 32;
 
         //==================================================================
         //  Shader + kernel indices (cached once at construction)
@@ -157,6 +163,28 @@ namespace ChaosRL
 
             // Optimizer
             _adamStepKernel = _shader.FindKernel( "AdamStep" );
+
+            // Register GPU utility dispatchers for TensorStorage so that
+            // Clear / Fill / Allocate can dispatch compute kernels instead
+            // of allocating managed arrays for CPU -> GPU upload.
+            var shader = _shader;
+            var zfk = _zeroFillKernel;
+            var vfk = _valueFillKernel;
+
+            TensorStorage.GpuZeroFill = ( buf, size ) =>
+            {
+                shader.SetInt( "_Size", size );
+                shader.SetBuffer( zfk, "_Result", buf );
+                shader.Dispatch( zfk, Math.Max( 1, (size + THREADS - 1) / THREADS ), 1, 1 );
+            };
+
+            TensorStorage.GpuValueFill = ( buf, size, value ) =>
+            {
+                shader.SetInt( "_Size", size );
+                shader.SetFloat( "_FillValue", value );
+                shader.SetBuffer( vfk, "_Result", buf );
+                shader.Dispatch( vfk, Math.Max( 1, (size + THREADS - 1) / THREADS ), 1, 1 );
+            };
         }
 
         //==================================================================
@@ -595,8 +623,8 @@ namespace ChaosRL
             _shader.SetBuffer( _matMulForwardKernel, "_B", b.GpuBuffer );
             _shader.SetBuffer( _matMulForwardKernel, "_Result", c.GpuBuffer );
 
-            int gx = (N + TILE - 1) / TILE;
-            int gy = (M + TILE - 1) / TILE;
+            int gx = (N + BN - 1) / BN;
+            int gy = (M + BM - 1) / BM;
             _shader.Dispatch( _matMulForwardKernel, gx, gy, 1 );
         }
         //------------------------------------------------------------------
@@ -853,10 +881,12 @@ namespace ChaosRL
         {
             _shader.SetInt( "_M", rows );
             _shader.SetInt( "_N", cols );
-            _shader.SetInt( "_Size", totalSize );
             _shader.SetBuffer( _transposeKernel, "_Input", input );
             _shader.SetBuffer( _transposeKernel, "_Result", result );
-            _shader.Dispatch( _transposeKernel, Groups( totalSize ), 1, 1 );
+
+            int gx = (cols + TRANS_TILE - 1) / TRANS_TILE;
+            int gy = (rows + TRANS_TILE - 1) / TRANS_TILE;
+            _shader.Dispatch( _transposeKernel, gx, gy, 1 );
         }
         //------------------------------------------------------------------
         /// <summary>Internal MatMul dispatch using raw GraphicsBuffer handles.</summary>
@@ -871,8 +901,8 @@ namespace ChaosRL
             _shader.SetBuffer( _matMulForwardKernel, "_B", b );
             _shader.SetBuffer( _matMulForwardKernel, "_Result", c );
 
-            int gx = (N + TILE - 1) / TILE;
-            int gy = (M + TILE - 1) / TILE;
+            int gx = (N + BN - 1) / BN;
+            int gy = (M + BM - 1) / BM;
             _shader.Dispatch( _matMulForwardKernel, gx, gy, 1 );
         }
         //------------------------------------------------------------------

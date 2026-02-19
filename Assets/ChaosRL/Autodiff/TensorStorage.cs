@@ -16,6 +16,15 @@ namespace ChaosRL
     public class TensorStorage : IDisposable
     {
         //------------------------------------------------------------------
+        //  GPU utility delegates — registered by GpuBackend at startup so
+        //  that Clear / Fill / Allocate can dispatch compute kernels instead
+        //  of allocating managed arrays for CPU -> GPU upload.
+        //------------------------------------------------------------------
+
+        internal static Action<GraphicsBuffer, int> GpuZeroFill;
+        internal static Action<GraphicsBuffer, int, float> GpuValueFill;
+
+        //------------------------------------------------------------------
         /// <summary>
         /// Raw CPU backing buffer. Internal so only the ChaosRL assembly (CpuBackend, CpuMatMulOps,
         /// TensorJobs) can access the <see cref="NativeArray{T}"/> directly. External code
@@ -63,8 +72,11 @@ namespace ChaosRL
             {
                 var gpuBuf = new GraphicsBuffer(
                     GraphicsBuffer.Target.Structured, size, sizeof( float ) );
-                // Zero-initialize via managed array upload
-                gpuBuf.SetData( new float[ size ] );
+                // Zero-initialize via compute dispatch if available, else managed upload
+                if (GpuZeroFill != null)
+                    GpuZeroFill( gpuBuf, size );
+                else
+                    gpuBuf.SetData( new float[ size ] );
                 return new TensorStorage( gpuBuf, size );
             }
 
@@ -246,7 +258,10 @@ namespace ChaosRL
         {
             if (_device == TensorDevice.GPU)
             {
-                _gpuBuffer.SetData( new float[ _size ] );
+                if (GpuZeroFill != null)
+                    GpuZeroFill( _gpuBuffer, _size );
+                else
+                    _gpuBuffer.SetData( new float[ _size ] );
                 return;
             }
             UnsafeUtility.MemClear(
@@ -261,10 +276,15 @@ namespace ChaosRL
         {
             if (_device == TensorDevice.GPU)
             {
-                var tmp = new float[ _size ];
-                for (int i = 0; i < _size; i++)
-                    tmp[ i ] = value;
-                _gpuBuffer.SetData( tmp );
+                if (GpuValueFill != null)
+                    GpuValueFill( _gpuBuffer, _size, value );
+                else
+                {
+                    var tmp = new float[ _size ];
+                    for (int i = 0; i < _size; i++)
+                        tmp[ i ] = value;
+                    _gpuBuffer.SetData( tmp );
+                }
                 return;
             }
             UnsafeUtility.MemCpyReplicate(

@@ -4,7 +4,6 @@
 // ============================================================
 
 #define THREADS 256
-#define TILE    16
 
 // ============================================================
 //  Uniforms (set from GpuBackend before each dispatch)
@@ -562,56 +561,145 @@ void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
 }
 
 // ============================================================
-//  MatMul
+//  MatMul — 64x64 output tile with 4x4 register micro-tiles
+//  Thread group: 16x16 = 256 threads, each computes a 4x4 block
 // ============================================================
 
-groupshared float _tileA[ TILE ][ TILE ];
-groupshared float _tileB[ TILE ][ TILE ];
+#define BM  64
+#define BN  64
+#define BK  16
+#define TM  4
+#define TN  4
+
+groupshared float _smA[ BM ][ BK + 1 ];   // +1 padding avoids bank conflicts
+groupshared float _smB[ BK ][ BN + 1 ];
 
 #pragma kernel MatMulForward
-[numthreads( TILE, TILE, 1 )]
-void MatMulForward( uint3 dtid : SV_DispatchThreadID,
+[numthreads( BN / TN, BM / TM, 1 )]
+void MatMulForward( uint3 gid  : SV_GroupID,
                     uint3 gtid : SV_GroupThreadID )
 {
-    uint row = dtid.y;
-    uint col = dtid.x;
-    float sum = 0.0;
+    uint threadCol = gtid.x;
+    uint threadRow = gtid.y;
+    uint flatIdx   = threadRow * ( BN / TN ) + threadCol;
 
-    uint numTiles = ( _K + TILE - 1 ) / TILE;
-    for ( uint t = 0; t < numTiles; t++ )
+    uint cRowBase = gid.y * BM;
+    uint cColBase = gid.x * BN;
+
+    uint microRow = threadRow * TM;
+    uint microCol = threadCol * TN;
+
+    // Declare loop counters once to avoid D3D11 HLSL scoping warnings
+    uint mm_ri, mm_ci, mm_t, mm_ld, mm_k;
+
+    float acc[ TM ][ TN ];
+    [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
+        [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
+            acc[ mm_ri ][ mm_ci ] = 0.0;
+
+    uint numTiles = ( _K + BK - 1 ) / BK;
+    for ( mm_t = 0; mm_t < numTiles; mm_t++ )
     {
-        uint aCol = t * TILE + gtid.x;
-        uint bRow = t * TILE + gtid.y;
+        uint kBase = mm_t * BK;
 
-        _tileA[ gtid.y ][ gtid.x ] = ( row < _M && aCol < _K ) ? _A[ row * _K + aCol ] : 0.0;
-        _tileB[ gtid.y ][ gtid.x ] = ( bRow < _K && col  < _N ) ? _B[ bRow * _N + col ] : 0.0;
+        // Load A tile: BM x BK = 1024 elements, 256 threads -> 4 per thread
+        [unroll] for ( mm_ld = 0; mm_ld < ( BM * BK / 256 ); mm_ld++ )
+        {
+            uint mm_li = flatIdx + mm_ld * 256;
+            uint lRow  = mm_li / BK;
+            uint lCol  = mm_li % BK;
+            uint gRow  = cRowBase + lRow;
+            uint gCol  = kBase + lCol;
+            _smA[ lRow ][ lCol ] =
+                ( gRow < _M && gCol < _K ) ? _A[ gRow * _K + gCol ] : 0.0;
+        }
+
+        // Load B tile: BK x BN = 1024 elements, 256 threads -> 4 per thread
+        [unroll] for ( mm_ld = 0; mm_ld < ( BK * BN / 256 ); mm_ld++ )
+        {
+            uint mm_li = flatIdx + mm_ld * 256;
+            uint lRow  = mm_li / BN;
+            uint lCol  = mm_li % BN;
+            uint gRow  = kBase + lRow;
+            uint gCol  = cColBase + lCol;
+            _smB[ lRow ][ lCol ] =
+                ( gRow < _K && gCol < _N ) ? _B[ gRow * _N + gCol ] : 0.0;
+        }
 
         GroupMemoryBarrierWithGroupSync();
 
-        for ( uint k = 0; k < TILE; k++ )
-            sum += _tileA[ gtid.y ][ k ] * _tileB[ k ][ gtid.x ];
+        // Outer product accumulation over K tile
+        [unroll] for ( mm_k = 0; mm_k < BK; mm_k++ )
+        {
+            float regA[ TM ];
+            float regB[ TN ];
+            [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
+                regA[ mm_ri ] = _smA[ microRow + mm_ri ][ mm_k ];
+            [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
+                regB[ mm_ci ] = _smB[ mm_k ][ microCol + mm_ci ];
+
+            [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
+                [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
+                    acc[ mm_ri ][ mm_ci ] += regA[ mm_ri ] * regB[ mm_ci ];
+        }
 
         GroupMemoryBarrierWithGroupSync();
     }
 
-    if ( row < _M && col < _N )
+    // Write results
+    [unroll] for ( mm_ri = 0; mm_ri < TM; mm_ri++ )
     {
-        uint idx = row * _N + col;
-        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + sum : sum;
+        uint globalRow = cRowBase + microRow + mm_ri;
+        if ( globalRow >= _M ) continue;
+        [unroll] for ( mm_ci = 0; mm_ci < TN; mm_ci++ )
+        {
+            uint globalCol = cColBase + microCol + mm_ci;
+            if ( globalCol >= _N ) continue;
+            uint idx = globalRow * _N + globalCol;
+            _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc[ mm_ri ][ mm_ci ] : acc[ mm_ri ][ mm_ci ];
+        }
     }
 }
 
 //------------------------------------------------------------------
+//  Tiled transpose — 32x32 tiles with shared memory
+//  Coalesced reads and writes, +1 padding to avoid bank conflicts
+//------------------------------------------------------------------
+
+#define TRANS_TILE 32
+
+groupshared float _transTile[ TRANS_TILE ][ TRANS_TILE + 1 ];
+
 #pragma kernel Transpose
-[numthreads( THREADS, 1, 1 )]
-void Transpose( uint3 id : SV_DispatchThreadID )
+[numthreads( TRANS_TILE, 8, 1 )]
+void Transpose( uint3 gid : SV_GroupID,
+                uint3 tid : SV_GroupThreadID )
 {
-    // Transpose _M x _N matrix: _Input[row * _N + col] -> _Result[col * _M + row]
-    uint idx = id.x;
-    if ( idx >= _Size ) return;
-    uint row = idx / _N;
-    uint col = idx % _N;
-    _Result[ col * _M + row ] = _Input[ idx ];
+    uint xBlock = gid.x * TRANS_TILE;
+    uint yBlock = gid.y * TRANS_TILE;
+
+    // Declare loop counter once to avoid D3D11 HLSL scoping warnings
+    uint tr_i;
+
+    // Coalesced load -- each of 256 threads covers 4 rows
+    [unroll] for ( tr_i = 0; tr_i < 4; tr_i++ )
+    {
+        uint row = yBlock + tid.y + tr_i * 8;
+        uint col = xBlock + tid.x;
+        _transTile[ tid.y + tr_i * 8 ][ tid.x ] =
+            ( row < _M && col < _N ) ? _Input[ row * _N + col ] : 0.0;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+
+    // Coalesced write -- transposed block position
+    [unroll] for ( tr_i = 0; tr_i < 4; tr_i++ )
+    {
+        uint outRow = xBlock + tid.y + tr_i * 8;
+        uint outCol = yBlock + tid.x;
+        if ( outRow < _N && outCol < _M )
+            _Result[ outRow * _M + outCol ] = _transTile[ tid.x ][ tid.y + tr_i * 8 ];
+    }
 }
 
 // ============================================================
