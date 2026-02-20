@@ -565,40 +565,25 @@ void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
 //  MatMul
 // ============================================================
 
-groupshared float _tileA[ TILE ][ TILE ];
-groupshared float _tileB[ TILE ][ TILE ];
-
 #pragma kernel MatMulForward
 [numthreads( TILE, TILE, 1 )]
-void MatMulForward( uint3 dtid : SV_DispatchThreadID,
-                    uint3 gtid : SV_GroupThreadID )
+void MatMulForward( uint3 id : SV_DispatchThreadID )
 {
-    uint row = dtid.y;
-    uint col = dtid.x;
-    float sum = 0.0;
+    uint row = id.y;
+    uint col = id.x;
 
-    uint numTiles = ( _K + TILE - 1 ) / TILE;
-    for ( uint t = 0; t < numTiles; t++ )
+    if ( row >= _M || col >= _N )
+        return;
+
+    float acc = 0.0;
+
+    for ( uint k = 0; k < _K; k++ )
     {
-        uint aCol = t * TILE + gtid.x;
-        uint bRow = t * TILE + gtid.y;
-
-        _tileA[ gtid.y ][ gtid.x ] = ( row < _M && aCol < _K ) ? _A[ row * _K + aCol ] : 0.0;
-        _tileB[ gtid.y ][ gtid.x ] = ( bRow < _K && col  < _N ) ? _B[ bRow * _N + col ] : 0.0;
-
-        GroupMemoryBarrierWithGroupSync();
-
-        for ( uint k = 0; k < TILE; k++ )
-            sum += _tileA[ gtid.y ][ k ] * _tileB[ k ][ gtid.x ];
-
-        GroupMemoryBarrierWithGroupSync();
+        acc += _A[ row * _K + k ] * _B[ k * _N + col ];
     }
 
-    if ( row < _M && col < _N )
-    {
-        uint idx = row * _N + col;
-        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + sum : sum;
-    }
+    uint idx = row * _N + col;
+    _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc : acc;
 }
 
 //------------------------------------------------------------------
