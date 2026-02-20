@@ -149,9 +149,9 @@ namespace ChaosRL
             };
 
             sb.AppendLine( "GPU Results (MatMul Only):" );
-            sb.AppendLine( new string( '-', 80 ) );
-            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"API (ms)",-10} {"Raw (ms)",-10} {"E2E (ms)",-10} {"Raw GFLOPS",-12} {"E2E GFLOPS",-12} {"Peak GFLOPS",-12}" );
+            sb.AppendLine( new string( '-', 100 ) );
             _benchmarkResults = sb.ToString();
             yield return null;
 
@@ -161,13 +161,13 @@ namespace ChaosRL
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
             sb.AppendLine();
 
             sb.AppendLine( "GPU Results (MatMul + Backward):" );
-            sb.AppendLine( new string( '-', 80 ) );
-            sb.AppendLine( $"{"Matrix Size",-25} {"Avg Time (ms)",-20} {"Std Dev (ms)",-20} {"GFLOPS",-10}" );
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
+            sb.AppendLine( $"{"Matrix Size",-25} {"API (ms)",-10} {"Raw (ms)",-10} {"E2E (ms)",-10} {"Raw GFLOPS",-12} {"E2E GFLOPS",-12} {"Peak GFLOPS",-12}" );
+            sb.AppendLine( new string( '-', 100 ) );
             _benchmarkResults = sb.ToString();
             yield return null;
 
@@ -177,7 +177,7 @@ namespace ChaosRL
                 _benchmarkResults = sb.ToString();
                 yield return null;
             }
-            sb.AppendLine( new string( '-', 80 ) );
+            sb.AppendLine( new string( '-', 100 ) );
             sb.AppendLine( "Done." );
 
             _benchmarkResults = sb.ToString();
@@ -236,6 +236,7 @@ namespace ChaosRL
 
             const int warmup = 3;
             const int iterations = 10;
+            const int innerLoop = 10;
 
             var aArr = new float[ M * K ];
             var bArr = new float[ K * N ];
@@ -249,35 +250,75 @@ namespace ChaosRL
             a.Data.CopyFrom( aArr );
             b.Data.CopyFrom( bArr );
 
+            // 1. Measure Total E2E and API Overhead
+            double[] apiTimes = new double[ iterations ];
+            double[] e2eTimes = new double[ iterations ];
+
             for (int i = 0; i < warmup; i++)
             {
                 var r = a.MatMul( b );
                 GpuSync( r );
             }
 
-            double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
-                var sw = Stopwatch.StartNew();
+                var swE2E = Stopwatch.StartNew();
+
+                var swApi = Stopwatch.StartNew();
                 var r = a.MatMul( b );
+                swApi.Stop();
+
                 GpuSync( r );
-                sw.Stop();
-                times[ i ] = sw.Elapsed.TotalMilliseconds;
+                swE2E.Stop();
+
+                apiTimes[ i ] = swApi.Elapsed.TotalMilliseconds;
+                e2eTimes[ i ] = swE2E.Elapsed.TotalMilliseconds;
             }
 
-            double avgTime = 0;
-            foreach (var t in times) avgTime += t;
-            avgTime /= iterations;
+            // 2. Measure Raw Compute (amortized)
+            var c = new Tensor( new[] { M, N }, device: TensorDevice.GPU );
+            var backend = a.Backend;
 
-            double sumSquares = 0;
-            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
-            double stdDev = Math.Sqrt( sumSquares / iterations );
+            for (int i = 0; i < warmup; i++)
+            {
+                backend.MatMul( a.Data, b.Data, c.Data, M, K, N, false );
+                GpuSync( c );
+            }
+
+            double[] rawTimes = new double[ iterations ];
+            for (int i = 0; i < iterations; i++)
+            {
+                var swRaw = Stopwatch.StartNew();
+                for (int j = 0; j < innerLoop; j++)
+                {
+                    backend.MatMul( a.Data, b.Data, c.Data, M, K, N, false );
+                }
+                GpuSync( c );
+                swRaw.Stop();
+                rawTimes[ i ] = swRaw.Elapsed.TotalMilliseconds / innerLoop;
+            }
+
+            double avgApi = 0, avgE2E = 0, avgRaw = 0;
+            double minE2E = double.MaxValue;
+            foreach (var t in apiTimes) avgApi += t;
+            foreach (var t in e2eTimes)
+            {
+                avgE2E += t;
+                if (t < minE2E) minE2E = t;
+            }
+            foreach (var t in rawTimes) avgRaw += t;
+
+            avgApi /= iterations;
+            avgE2E /= iterations;
+            avgRaw /= iterations;
 
             var flops = 2.0 * M * K * N;
-            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
+            var gflopsRaw = (flops / (avgRaw / 1000.0)) / 1e9;
+            var gflopsE2E = (flops / (avgE2E / 1000.0)) / 1e9;
+            var gflopsPeak = (flops / (minE2E / 1000.0)) / 1e9;
 
             string sizeStr = $"{M}x{K} @ {K}x{N}";
-            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+            sb.AppendLine( $"{sizeStr,-25} {avgApi,-10:F3} {avgRaw,-10:F3} {avgE2E,-10:F3} {gflopsRaw,-12:F2} {gflopsE2E,-12:F2} {gflopsPeak,-12:F2}" );
         }
         //------------------------------------------------------------------
         private void RunTensorMatMulWithBackward( int M, int K, int N, StringBuilder sb )
@@ -341,6 +382,7 @@ namespace ChaosRL
 
             const int warmup = 3;
             const int iterations = 10;
+            const int innerLoop = 10;
 
             var aArr = new float[ M * K ];
             var bArr = new float[ K * N ];
@@ -354,6 +396,10 @@ namespace ChaosRL
             a.Data.CopyFrom( aArr );
             b.Data.CopyFrom( bArr );
 
+            // 1. Measure Total E2E and API Overhead
+            double[] apiTimes = new double[ iterations ];
+            double[] e2eTimes = new double[ iterations ];
+
             for (int i = 0; i < warmup; i++)
             {
                 var result = a.MatMul( b );
@@ -364,33 +410,88 @@ namespace ChaosRL
                 GpuSync( loss );
             }
 
-            double[] times = new double[ iterations ];
             for (int i = 0; i < iterations; i++)
             {
-                var sw = Stopwatch.StartNew();
+                var swE2E = Stopwatch.StartNew();
+
+                var swApi = Stopwatch.StartNew();
                 var result = a.MatMul( b );
                 var loss = result.Sum();
                 loss.Backward();
                 a.ZeroGrad();
                 b.ZeroGrad();
+                swApi.Stop();
+
                 GpuSync( loss );
-                sw.Stop();
-                times[ i ] = sw.Elapsed.TotalMilliseconds;
+                swE2E.Stop();
+
+                apiTimes[ i ] = swApi.Elapsed.TotalMilliseconds;
+                e2eTimes[ i ] = swE2E.Elapsed.TotalMilliseconds;
             }
 
-            double avgTime = 0;
-            foreach (var t in times) avgTime += t;
-            avgTime /= iterations;
+            // 2. Measure Raw Compute (amortized)
+            var c = new Tensor( new[] { M, N }, device: TensorDevice.GPU );
+            var lossTensor = new Tensor( new[] { 1 }, device: TensorDevice.GPU );
+            var backend = a.Backend;
 
-            double sumSquares = 0;
-            foreach (var t in times) sumSquares += (t - avgTime) * (t - avgTime);
-            double stdDev = Math.Sqrt( sumSquares / iterations );
+            for (int i = 0; i < warmup; i++)
+            {
+                backend.MatMul( a.Data, b.Data, c.Data, M, K, N, false );
+                backend.Sum( c.Data, lossTensor.Data, M * N );
+
+                backend.FillOnes( lossTensor.Grad, 1 );
+                backend.ZeroGrad( c.Grad, M * N );
+
+                backend.SumBackward( c.Grad, lossTensor.Grad, M * N );
+                backend.MatMulBackward( a.Data, b.Data, a.Grad, b.Grad, c.Grad, M, K, N, true, true );
+                backend.ZeroGrad( a.Grad, M * K );
+                backend.ZeroGrad( b.Grad, K * N );
+                GpuSync( lossTensor );
+            }
+
+            double[] rawTimes = new double[ iterations ];
+            for (int i = 0; i < iterations; i++)
+            {
+                var swRaw = Stopwatch.StartNew();
+                for (int j = 0; j < innerLoop; j++)
+                {
+                    backend.MatMul( a.Data, b.Data, c.Data, M, K, N, false );
+                    backend.Sum( c.Data, lossTensor.Data, M * N );
+
+                    backend.FillOnes( lossTensor.Grad, 1 );
+                    backend.ZeroGrad( c.Grad, M * N );
+
+                    backend.SumBackward( c.Grad, lossTensor.Grad, M * N );
+                    backend.MatMulBackward( a.Data, b.Data, a.Grad, b.Grad, c.Grad, M, K, N, true, true );
+                    backend.ZeroGrad( a.Grad, M * K );
+                    backend.ZeroGrad( b.Grad, K * N );
+                }
+                GpuSync( lossTensor );
+                swRaw.Stop();
+                rawTimes[ i ] = swRaw.Elapsed.TotalMilliseconds / innerLoop;
+            }
+
+            double avgApi = 0, avgE2E = 0, avgRaw = 0;
+            double minE2E = double.MaxValue;
+            foreach (var t in apiTimes) avgApi += t;
+            foreach (var t in e2eTimes)
+            {
+                avgE2E += t;
+                if (t < minE2E) minE2E = t;
+            }
+            foreach (var t in rawTimes) avgRaw += t;
+
+            avgApi /= iterations;
+            avgE2E /= iterations;
+            avgRaw /= iterations;
 
             var flops = 6.0 * M * K * N;
-            var gflops = (flops / (avgTime / 1000.0)) / 1e9;
+            var gflopsRaw = (flops / (avgRaw / 1000.0)) / 1e9;
+            var gflopsE2E = (flops / (avgE2E / 1000.0)) / 1e9;
+            var gflopsPeak = (flops / (minE2E / 1000.0)) / 1e9;
 
             string sizeStr = $"{M}x{K} @ {K}x{N}";
-            sb.AppendLine( $"{sizeStr,-25} {avgTime,-20:F3} {stdDev,-20:F3} {gflops,-10:F2}" );
+            sb.AppendLine( $"{sizeStr,-25} {avgApi,-10:F3} {avgRaw,-10:F3} {avgE2E,-10:F3} {gflopsRaw,-12:F2} {gflopsE2E,-12:F2} {gflopsPeak,-12:F2}" );
         }
         //------------------------------------------------------------------
         /// <summary>
