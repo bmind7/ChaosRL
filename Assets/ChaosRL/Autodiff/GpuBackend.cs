@@ -848,7 +848,10 @@ namespace ChaosRL
             _shader.SetInt( "_Size", totalSize );
             _shader.SetBuffer( _transposeKernel, "_Input", input );
             _shader.SetBuffer( _transposeKernel, "_Result", result );
-            _shader.Dispatch( _transposeKernel, Groups( totalSize ), 1, 1 );
+
+            int gx = (cols + TILE - 1) / TILE;
+            int gy = (rows + TILE - 1) / TILE;
+            _shader.Dispatch( _transposeKernel, gx, gy, 1 );
         }
         //------------------------------------------------------------------
         /// <summary>Internal MatMul dispatch using raw GraphicsBuffer handles.</summary>

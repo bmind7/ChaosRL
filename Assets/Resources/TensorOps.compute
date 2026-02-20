@@ -660,16 +660,31 @@ void MatMulForward( uint3 gid : SV_GroupID,
 }
 
 //------------------------------------------------------------------
+groupshared float _TransposeTile[ TILE ][ TILE + 1 ];
+
 #pragma kernel Transpose
-[numthreads( THREADS, 1, 1 )]
-void Transpose( uint3 id : SV_DispatchThreadID )
+[numthreads( TILE, TILE, 1 )]
+void Transpose( uint3 gid : SV_GroupID,
+                uint3 tid : SV_GroupThreadID,
+                uint3 dtid : SV_DispatchThreadID )
 {
-    // Transpose _M x _N matrix: _Input[row * _N + col] -> _Result[col * _M + row]
-    uint idx = id.x;
-    if ( idx >= _Size ) return;
-    uint row = idx / _N;
-    uint col = idx % _N;
-    _Result[ col * _M + row ] = _Input[ idx ];
+    // Input coordinates this thread loads
+    uint inRow = dtid.y;
+    uint inCol = dtid.x;
+
+    // Load input tile into shared memory (contiguous reads)
+    if ( inRow < _M && inCol < _N )
+        _TransposeTile[ tid.y ][ tid.x ] = _Input[ inRow * _N + inCol ];
+
+    GroupMemoryBarrierWithGroupSync();
+
+    // Compute output coordinates for transposed write
+    // Output is N x M
+    uint outRow = gid.x * TILE + tid.y; // swapped
+    uint outCol = gid.y * TILE + tid.x;
+
+    if ( outRow < _N && outCol < _M )
+        _Result[ outRow * _M + outCol ] = _TransposeTile[ tid.x ][ tid.y ];
 }
 
 // ============================================================
