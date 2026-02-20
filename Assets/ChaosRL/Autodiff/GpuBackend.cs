@@ -585,8 +585,10 @@ namespace ChaosRL
             _shader.SetBuffer( _matMulForwardKernel, "_B", b.GpuBuffer );
             _shader.SetBuffer( _matMulForwardKernel, "_Result", c.GpuBuffer );
 
-            int gx = (N + TILE - 1) / TILE;
-            int gy = (M + TILE - 1) / TILE;
+            // The kernel computes a (TILE*2)x(TILE*2) block per threadgroup
+            int tileOut = TILE * 2;
+            int gx = (N + tileOut - 1) / tileOut;
+            int gy = (M + tileOut - 1) / tileOut;
             _shader.Dispatch( _matMulForwardKernel, gx, gy, 1 );
         }
         //------------------------------------------------------------------
@@ -861,8 +863,10 @@ namespace ChaosRL
             _shader.SetBuffer( _matMulForwardKernel, "_B", b );
             _shader.SetBuffer( _matMulForwardKernel, "_Result", c );
 
-            int gx = (N + TILE - 1) / TILE;
-            int gy = (M + TILE - 1) / TILE;
+            // The kernel computes a (TILE*2)x(TILE*2) block per threadgroup
+            int tileOut = TILE * 2;
+            int gx = (N + tileOut - 1) / tileOut;
+            int gy = (M + tileOut - 1) / tileOut;
             _shader.Dispatch( _matMulForwardKernel, gx, gy, 1 );
         }
         //------------------------------------------------------------------

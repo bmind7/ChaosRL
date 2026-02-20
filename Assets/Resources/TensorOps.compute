@@ -573,51 +573,89 @@ void MaxReduceDimBackward( uint3 id : SV_DispatchThreadID )
 //  MatMul
 // ============================================================
 
-groupshared float _As[ TILE ][ TILE ];
-groupshared float _Bs[ TILE ][ TILE ];
+#define TILE_OUT (TILE * 2)
+
+groupshared float _As[ TILE_OUT ][ TILE ];
+groupshared float _Bs[ TILE ][ TILE_OUT ];
 
 #pragma kernel MatMulForward
 [numthreads( TILE, TILE, 1 )]
-void MatMulForward( uint3 dtid : SV_DispatchThreadID,
-                    uint3 tid  : SV_GroupThreadID )
+void MatMulForward( uint3 gid : SV_GroupID,
+                    uint3 tid : SV_GroupThreadID )
 {
-    uint row = dtid.y;
-    uint col = dtid.x;
-
     uint tx = tid.x;
     uint ty = tid.y;
 
-    float acc = 0.0;
+    uint baseRow = gid.y * TILE_OUT;
+    uint baseCol = gid.x * TILE_OUT;
+
+    uint row0 = baseRow + ty * 2;
+    uint row1 = row0 + 1;
+    uint col0 = baseCol + tx * 2;
+    uint col1 = col0 + 1;
+
+    float c00 = 0.0;
+    float c01 = 0.0;
+    float c10 = 0.0;
+    float c11 = 0.0;
 
     for ( uint k0 = 0; k0 < _K; k0 += TILE )
     {
         uint aCol = k0 + tx;
-        if ( row < _M && aCol < _K )
-            _As[ ty ][ tx ] = _A[ row * _K + aCol ];
-        else
-            _As[ ty ][ tx ] = 0.0;
+
+        if ( row0 < _M && aCol < _K ) _As[ ty * 2 + 0 ][ tx ] = _A[ row0 * _K + aCol ];
+        else                          _As[ ty * 2 + 0 ][ tx ] = 0.0;
+
+        if ( row1 < _M && aCol < _K ) _As[ ty * 2 + 1 ][ tx ] = _A[ row1 * _K + aCol ];
+        else                          _As[ ty * 2 + 1 ][ tx ] = 0.0;
 
         uint bRow = k0 + ty;
-        if ( bRow < _K && col < _N )
-            _Bs[ ty ][ tx ] = _B[ bRow * _N + col ];
-        else
-            _Bs[ ty ][ tx ] = 0.0;
+
+        if ( bRow < _K && col0 < _N ) _Bs[ ty ][ tx * 2 + 0 ] = _B[ bRow * _N + col0 ];
+        else                          _Bs[ ty ][ tx * 2 + 0 ] = 0.0;
+
+        if ( bRow < _K && col1 < _N ) _Bs[ ty ][ tx * 2 + 1 ] = _B[ bRow * _N + col1 ];
+        else                          _Bs[ ty ][ tx * 2 + 1 ] = 0.0;
 
         GroupMemoryBarrierWithGroupSync();
 
         [unroll]
         for ( uint kk = 0; kk < TILE; kk++ )
         {
-            acc += _As[ ty ][ kk ] * _Bs[ kk ][ tx ];
+            float a0 = _As[ ty * 2 + 0 ][ kk ];
+            float a1 = _As[ ty * 2 + 1 ][ kk ];
+
+            float b0 = _Bs[ kk ][ tx * 2 + 0 ];
+            float b1 = _Bs[ kk ][ tx * 2 + 1 ];
+
+            c00 += a0 * b0;
+            c01 += a0 * b1;
+            c10 += a1 * b0;
+            c11 += a1 * b1;
         }
 
         GroupMemoryBarrierWithGroupSync();
     }
 
-    if ( row < _M && col < _N )
+    if ( row0 < _M && col0 < _N )
     {
-        uint idx = row * _N + col;
-        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + acc : acc;
+        uint idx = row0 * _N + col0;
+        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + c00 : c00;
+    }
+    if ( row0 < _M && col1 < _N )
+    {
+        uint idx = row0 * _N + col1;
+        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + c01 : c01;
+    }
+    if ( row1 < _M && col0 < _N )
+    {
+        uint idx = row1 * _N + col0;
+        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + c10 : c10;
+    }
+    if ( row1 < _M && col1 < _N )
+    {
+        uint idx = row1 * _N + col1;
+        _Result[ idx ] = ( _Accumulate != 0 ) ? _Result[ idx ] + c11 : c11;
     }
 }
 
