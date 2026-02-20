@@ -110,17 +110,21 @@ namespace ChaosRL
                     $"Tensor device mismatch: '{a.Name}' on {a.Device}, '{b.Name}' on {b.Device}. Use Tensor.To() to transfer." );
         }
         //------------------------------------------------------------------
+        public static TensorDevice DefaultDevice { get; set; } = TensorDevice.CPU;
+        //------------------------------------------------------------------
         // TODO: switch to params int[] for shape to improve usability
         public Tensor( int[] shape, float[] data = null, string name = "", bool requiresGrad = true,
-                       TensorDevice device = TensorDevice.CPU )
+                       TensorDevice? device = null )
         {
             ValidateAndCalculateSize( shape );
+
+            TensorDevice actualDevice = device ?? DefaultDevice;
 
             if (data != null && data.Length != Size)
                 throw new ArgumentException( $"Data length {data.Length} doesn't match shape size {Size}" );
 
-            Data = TensorStorage.Allocate( Size, device );
-            Grad = TensorStorage.Allocate( Size, device );
+            Data = TensorStorage.Allocate( Size, actualDevice );
+            Grad = TensorStorage.Allocate( Size, actualDevice );
 
             if (data != null)
                 Data.CopyFrom( data );
@@ -128,7 +132,7 @@ namespace ChaosRL
             Name = name;
             Children = new HashSet<Tensor>();
             RequiresGrad = requiresGrad;
-            Backend = ResolveBackend( device );
+            Backend = ResolveBackend( actualDevice );
             _backward = null;
 
             TensorScope.Track( this );
@@ -168,7 +172,7 @@ namespace ChaosRL
         }
         //------------------------------------------------------------------
         public Tensor( int[] shape, Tensor[] children, string name = "",
-                       TensorDevice device = TensorDevice.CPU ) : this( shape, (float[])null, name, device: device )
+                       TensorDevice? device = null ) : this( shape, (float[])null, name, device: device )
         {
             if (children != null)
                 foreach (var child in children)
@@ -176,7 +180,7 @@ namespace ChaosRL
         }
         //------------------------------------------------------------------
         // Scalar tensor constructor
-        public Tensor( float scalar, string name = "", bool requiresGrad = true ) : this( new[] { 1 }, new[] { scalar }, name, requiresGrad )
+        public Tensor( float scalar, string name = "", bool requiresGrad = true, TensorDevice? device = null ) : this( new[] { 1 }, new[] { scalar }, name, requiresGrad, device )
         {
         }
         //------------------------------------------------------------------
@@ -211,6 +215,19 @@ namespace ChaosRL
         {
             return new Tensor( f );
         }
+        //------------------------------------------------------------------
+        // Scalar operator overloads
+        public static Tensor operator +( Tensor a, float b ) => a + new Tensor( b, requiresGrad: false, device: a.Device );
+        public static Tensor operator +( float a, Tensor b ) => new Tensor( a, requiresGrad: false, device: b.Device ) + b;
+
+        public static Tensor operator -( Tensor a, float b ) => a - new Tensor( b, requiresGrad: false, device: a.Device );
+        public static Tensor operator -( float a, Tensor b ) => new Tensor( a, requiresGrad: false, device: b.Device ) - b;
+
+        public static Tensor operator *( Tensor a, float b ) => a * new Tensor( b, requiresGrad: false, device: a.Device );
+        public static Tensor operator *( float a, Tensor b ) => new Tensor( a, requiresGrad: false, device: b.Device ) * b;
+
+        public static Tensor operator /( Tensor a, float b ) => a / new Tensor( b, requiresGrad: false, device: a.Device );
+        public static Tensor operator /( float a, Tensor b ) => new Tensor( a, requiresGrad: false, device: b.Device ) / b;
         //------------------------------------------------------------------
         // Element-wise addition
         public static Tensor operator +( Tensor a, Tensor b )
@@ -276,7 +293,7 @@ namespace ChaosRL
         //------------------------------------------------------------------
         public static Tensor operator -( Tensor a )
         {
-            return a * -1f;
+            return a * new Tensor( -1f, device: a.Device );
         }
         //------------------------------------------------------------------
         public static Tensor operator -( Tensor a, Tensor b )
@@ -598,7 +615,7 @@ namespace ChaosRL
         public Tensor Mean()
         {
             var sum = Sum();
-            return sum / (float)Size;
+            return sum / new Tensor( (float)Size, device: Device );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -617,7 +634,7 @@ namespace ChaosRL
 
             var sum = Sum( dim );
             var dimSize = Shape[ dim ];
-            return sum / (float)dimSize;
+            return sum / new Tensor( (float)dimSize, device: Device );
         }
         //------------------------------------------------------------------
         /// <summary>
@@ -633,13 +650,15 @@ namespace ChaosRL
         /// <returns>Normalized tensor</returns>
         public Tensor Normalize( int? dim = null, float epsilon = 1e-5f )
         {
+            var epsTensor = new Tensor( epsilon, device: Device );
+
             if (!dim.HasValue)
             {
                 // Normalize entire tensor
                 var mean = Mean();
                 var centered = this - mean;
                 var variance = (centered * centered).Mean();
-                var std = (variance + epsilon).Sqrt();
+                var std = (variance + epsTensor).Sqrt();
                 return centered / std;
             }
 
@@ -658,7 +677,7 @@ namespace ChaosRL
                 var mean = Mean( 0 );
                 var centered = this - mean;
                 var variance = (centered * centered).Mean( 0 );
-                var std = (variance + epsilon).Sqrt();
+                var std = (variance + epsTensor).Sqrt();
                 return centered / std;
             }
             else
@@ -670,7 +689,7 @@ namespace ChaosRL
                 var centered = this - meanExpanded;
                 var variance = (centered * centered).Mean( rank - 1 );
                 var varianceExpanded = variance.ExpandLast( Shape[ rank - 1 ] );
-                var std = (varianceExpanded + epsilon).Sqrt();
+                var std = (varianceExpanded + epsTensor).Sqrt();
                 return centered / std;
             }
         }

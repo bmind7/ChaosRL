@@ -494,10 +494,18 @@ void MaxReduce( uint3 dtid : SV_DispatchThreadID,
 
     for ( uint s = THREADS / 2; s > 0; s >>= 1 )
     {
-        if ( tid < s && _sharedF[ tid + s ] > _sharedF[ tid ] )
+        if ( tid < s )
         {
-            _sharedF[ tid ] = _sharedF[ tid + s ];
-            _sharedU[ tid ] = _sharedU[ tid + s ];
+            if ( _sharedF[ tid + s ] > _sharedF[ tid ] )
+            {
+                _sharedF[ tid ] = _sharedF[ tid + s ];
+                _sharedU[ tid ] = _sharedU[ tid + s ];
+            }
+            else if ( _sharedF[ tid + s ] == _sharedF[ tid ] && _sharedU[ tid + s ] < _sharedU[ tid ] )
+            {
+                // Tie-breaker: prefer the smaller index (first occurrence)
+                _sharedU[ tid ] = _sharedU[ tid + s ];
+            }
         }
         GroupMemoryBarrierWithGroupSync();
     }

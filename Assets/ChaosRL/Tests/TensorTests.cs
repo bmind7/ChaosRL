@@ -6,8 +6,37 @@ using System.Diagnostics;
 
 namespace ChaosRL.Tests
 {
+    [TestFixture( TensorDevice.CPU )]
+    [TestFixture( TensorDevice.GPU )]
     public class TensorTests : TensorScopedTestBase
     {
+        private readonly TensorDevice _device;
+
+        public TensorTests( TensorDevice device )
+        {
+            _device = device;
+        }
+
+        [SetUp]
+        public void SetUp()
+        {
+            Tensor.DefaultDevice = _device;
+
+            if (_device == TensorDevice.GPU)
+            {
+                if (!UnityEngine.SystemInfo.supportsComputeShaders)
+                    Assert.Ignore( "Compute shaders are not supported on this platform." );
+
+                Tensor.GpuBackend ??= new GpuBackend();
+            }
+        }
+
+        [TearDown]
+        public void TearDown()
+        {
+            Tensor.DefaultDevice = TensorDevice.CPU;
+        }
+
         //------------------------------------------------------------------
         [Test]
         public void Constructor_ScalarTensor_CreatesCorrectly()
@@ -886,11 +915,11 @@ namespace ChaosRL.Tests
         [Test]
         public void ImplicitConversion_FromFloat_WorksInExpressions()
         {
-            Tensor t = 5.0f;
+            Tensor t = new Tensor( 5.0f );
             Assert.That( t.Data[ 0 ], Is.EqualTo( 5.0f ).Within( 1e-6 ) );
 
             var b = new Tensor( new[] { 1 }, new[] { 3.0f } );
-            var c = b + 2.0f;
+            var c = b + new Tensor( 2.0f );
             Assert.That( c.Data[ 0 ], Is.EqualTo( 5.0f ).Within( 1e-6 ) );
             c.Backward();
             Assert.That( b.Grad[ 0 ], Is.EqualTo( 1.0f ).Within( 1e-6 ) );
@@ -3082,6 +3111,35 @@ namespace ChaosRL.Tests
                 Assert.That( data.Grad[ i ], Is.EqualTo( 2f ).Within( 1e-6 ) ); // rows 2-4 (batch)
             for (int i = 25; i < 50; i++)
                 Assert.That( data.Grad[ i ], Is.EqualTo( 0f ).Within( 1e-6 ) ); // rows 5-9
+        }
+        //------------------------------------------------------------------
+        [Test]
+        public void ToGpu_ToCpu_RoundTrip_PreservesDataAndGrad()
+        {
+            if (_device == TensorDevice.CPU)
+                Assert.Ignore( "Device transfer test only needs to run once." );
+
+            var cpu = new Tensor( new[] { 2, 2 }, new[] { 1f, 2f, 3f, 4f }, device: TensorDevice.CPU );
+            cpu.Grad[ 0 ] = 0.1f;
+            cpu.Grad[ 1 ] = 0.2f;
+            cpu.Grad[ 2 ] = 0.3f;
+            cpu.Grad[ 3 ] = 0.4f;
+
+            var gpu = cpu.ToGpu();
+            Assert.That( gpu.Device, Is.EqualTo( TensorDevice.GPU ) );
+
+            var back = gpu.ToCpu();
+            Assert.That( back.Device, Is.EqualTo( TensorDevice.CPU ) );
+
+            Assert.That( back.Data[ 0 ], Is.EqualTo( 1f ).Within( 1e-6 ) );
+            Assert.That( back.Data[ 1 ], Is.EqualTo( 2f ).Within( 1e-6 ) );
+            Assert.That( back.Data[ 2 ], Is.EqualTo( 3f ).Within( 1e-6 ) );
+            Assert.That( back.Data[ 3 ], Is.EqualTo( 4f ).Within( 1e-6 ) );
+
+            Assert.That( back.Grad[ 0 ], Is.EqualTo( 0.1f ).Within( 1e-6 ) );
+            Assert.That( back.Grad[ 1 ], Is.EqualTo( 0.2f ).Within( 1e-6 ) );
+            Assert.That( back.Grad[ 2 ], Is.EqualTo( 0.3f ).Within( 1e-6 ) );
+            Assert.That( back.Grad[ 3 ], Is.EqualTo( 0.4f ).Within( 1e-6 ) );
         }
         //------------------------------------------------------------------
     }
