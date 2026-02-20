@@ -18,16 +18,6 @@ namespace ChaosRL
         private static readonly CpuBackend _cpuBackend = new CpuBackend();
         private static ITensorBackend _gpuBackend;
 
-        /// <summary>
-        /// Registers or retrieves the GPU backend implementation.
-        /// Must be set before creating GPU tensors.
-        /// </summary>
-        public static ITensorBackend GpuBackend
-        {
-            get => _gpuBackend;
-            set => _gpuBackend = value;
-        }
-
         private static ITensorBackend ResolveBackend( TensorDevice device )
         {
             switch (device)
@@ -36,10 +26,9 @@ namespace ChaosRL
                     return _cpuBackend;
 
                 case TensorDevice.GPU:
-                    if (_gpuBackend == null)
-                        throw new InvalidOperationException(
-                            "No GPU backend registered. Set Tensor.GpuBackend before using GPU tensors." );
-                    return _gpuBackend;
+                    if (!UnityEngine.SystemInfo.supportsComputeShaders)
+                        throw new NotSupportedException( "Compute shaders are not supported on this platform." );
+                    return _gpuBackend ??= new GpuBackend();
 
                 default:
                     throw new ArgumentOutOfRangeException( nameof( device ), device, "Unknown tensor device" );

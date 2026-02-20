@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 using UnityEngine;
 
@@ -167,16 +167,6 @@ namespace ChaosRL
         /// <summary>
         /// Automatically registers the GPU backend at application startup
         /// if the platform supports compute shaders.
-        /// </summary>
-        [RuntimeInitializeOnLoadMethod( RuntimeInitializeLoadType.BeforeSceneLoad )]
-        private static void AutoRegister()
-        {
-            if (!SystemInfo.supportsComputeShaders)
-                return;
-
-            Tensor.GpuBackend = new GpuBackend();
-        }
-
         //==================================================================
         //  Element-wise binary — forward
         //==================================================================

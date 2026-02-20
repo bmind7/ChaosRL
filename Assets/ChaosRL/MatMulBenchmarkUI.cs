@@ -134,9 +134,6 @@ namespace ChaosRL
                 yield break;
             }
 
-            if (Tensor.GpuBackend == null)
-                Tensor.GpuBackend = new GpuBackend();
-
             var shapes = new (int M, int K, int N)[]
             {
                 (64, 64, 64),

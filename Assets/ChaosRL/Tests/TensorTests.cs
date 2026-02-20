@@ -26,8 +26,6 @@ namespace ChaosRL.Tests
             {
                 if (!UnityEngine.SystemInfo.supportsComputeShaders)
                     Assert.Ignore( "Compute shaders are not supported on this platform." );
-
-                Tensor.GpuBackend ??= new GpuBackend();
             }
         }
 
